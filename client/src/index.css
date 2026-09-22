@@ -11,3 +11,94 @@
 @media(max-width:520px){.page-intro h2{font-size:23px}.stat-grid{gap:8px}.stat-card{min-height:91px}.stat-icon{display:none}.stat-copy strong{font-size:21px}.checks{grid-template-columns:1fr}.machine-grid,.evidence-grid,.report-grid,.admin-grid,.evidence-summary{grid-template-columns:1fr}.evidence-summary>div{grid-template-columns:30px 1fr}.workspace-title{justify-content:space-between}.workspace-meta{display:grid;grid-template-columns:1fr 1fr;gap:12px}.checklist-heading{padding:17px}.check-items{padding:2px 17px 15px}.checklist-footer{padding:13px 17px;align-items:flex-start;gap:10px;flex-direction:column}.check-item{gap:8px}.check-field{width:110px}.machine-illustration{width:120px;height:110px}.overview-hero{padding:15px;gap:11px}.version-grid{grid-template-columns:1fr;gap:8px}.versus{padding:3px}.version-card>strong{font-size:27px}.scanner-frame{width:220px;height:220px}}
 
 @media(max-width:820px){html,body,#root{width:100%;max-width:100%;overflow-x:hidden}.app-shell{display:block;width:100%;overflow-x:hidden}.main{width:100%;max-width:100%;margin-left:0!important}.content{width:100%;max-width:none;margin-left:0;margin-right:0}.mobile-header{width:100%;max-width:100%}}
+
+/* ── Login Page — Light Enterprise Design (matches dashboard design system) ── */
+.login-shell{min-height:100vh;background:var(--paper);display:flex;align-items:center;justify-content:center;padding:48px 20px;font-family:'DM Sans',sans-serif}
+.login-bg-shapes,.login-shape{display:none}
+.login-wrap{width:100%;max-width:580px}
+
+/* Brand header */
+.login-brand{text-align:center;margin-bottom:32px}
+.login-brand .brand{justify-content:center;gap:11px}
+.login-brand .brand-symbol{width:32px;height:32px;padding:6px 5px}
+.login-brand .brand strong{font-size:18px;color:#17324c;letter-spacing:-.8px}
+.login-brand .brand strong span{color:#2b9f98}
+.login-brand .brand small{color:#94a0aa;letter-spacing:1.1px}
+.login-tagline{color:var(--muted);font:500 10px 'DM Mono';letter-spacing:1.25px;text-transform:uppercase;margin:10px 0 0;text-align:center}
+
+/* Main card */
+.login-card{background:var(--white);border:1px solid var(--line);border-radius:9px;padding:30px 28px;box-shadow:0 4px 20px rgba(22,45,65,.06)}
+.login-card-header{margin-bottom:22px;padding-bottom:18px;border-bottom:1px solid #eef1f3}
+.login-card-header h2{font:800 20px Manrope;color:#102f46;margin:0 0 5px;letter-spacing:-.5px}
+.login-card-header p{color:var(--muted);font-size:12px;margin:0;line-height:18px}
+
+/* Back link */
+.login-back{color:#286485;font:500 10px 'DM Mono';margin-bottom:16px;display:inline-flex;align-items:center;gap:5px;padding:0;transition:.15s;letter-spacing:.2px}
+.login-back:hover{color:#17324c}
+
+/* Role selection cards */
+.role-cards{display:flex;flex-direction:column;gap:9px}
+.role-card{display:flex;align-items:center;gap:13px;border:1px solid var(--line);border-radius:7px;padding:16px 18px;background:var(--white);text-align:left;transition:.17s;width:100%;cursor:pointer;box-shadow:0 1px 3px rgba(22,45,65,.04)}
+.role-card:hover{border-color:#a8cbda;background:#f4f9fb;box-shadow:0 3px 10px rgba(22,99,132,.08)}
+.role-card:active{transform:scale(.995)}
+.role-card.inspector:hover,.role-card.admin:hover{border-color:#a8cbda}
+.role-icon{width:42px;height:42px;display:grid;place-items:center;border-radius:7px;flex:0 0 auto;transition:.17s}
+.role-icon.inspector{background:#e8f4f8;color:#286485}
+.role-icon.admin{background:#e8f4f8;color:#286485}
+.role-card:hover .role-icon.inspector,.role-card:hover .role-icon.admin{background:#d4eaf4;color:#1a5270}
+.role-card-copy{flex:1;min-width:0}
+.role-card-copy strong{display:block;color:#102f46;font:700 13px Manrope;letter-spacing:.1px}
+.role-card-copy span{display:block;font:500 9px 'DM Mono';letter-spacing:.5px;margin:3px 0 0;color:#286485;text-transform:uppercase}
+.role-arrow{color:#b0bfc8;flex:0 0 auto;transition:.17s}
+.role-card:hover .role-arrow{color:#286485;transform:translateX(3px)}
+
+/* Role badge above login form */
+.login-role-badge{display:inline-flex;align-items:center;gap:6px;border-radius:5px;padding:5px 9px;font:600 9px 'DM Mono';margin-bottom:14px;letter-spacing:.3px;background:#e8f4f8;color:#286485;border:1px solid #c5dce8}
+.login-role-badge.inspector,.login-role-badge.admin{background:#e8f4f8;color:#286485;border-color:#c5dce8}
+
+/* Form */
+.login-form{display:flex;flex-direction:column;gap:13px}
+.login-field label{display:block;color:var(--muted);font:500 9px 'DM Mono';letter-spacing:.7px;text-transform:uppercase;margin-bottom:6px}
+.login-field input,.pass-wrap input{width:100%;height:36px;background:var(--white);border:1px solid #d7e0e5;border-radius:6px;padding:0 11px;color:var(--ink);font-size:12px;outline:0;transition:.17s;font-family:'DM Sans',sans-serif;box-sizing:border-box}
+.login-field input::placeholder,.pass-wrap input::placeholder{color:#a8b5bd}
+.login-field input:focus,.pass-wrap input:focus{border-color:#6aadc4;box-shadow:0 0 0 3px rgba(28,99,132,.08);background:#fff}
+.pass-wrap{position:relative;display:flex;align-items:center}
+.pass-wrap input{width:100%;padding-right:36px}
+.pass-toggle{position:absolute;right:10px;color:#94a2aa;transition:.15s;padding:0;display:grid;place-items:center}
+.pass-toggle:hover{color:#286485}
+.login-error{background:#fff5f5;border:1px solid #f3c8c6;border-radius:6px;padding:10px 12px;color:#b94040;font-size:11px;line-height:16px}
+
+/* Submit button — uses exact same style as .btn.primary */
+.login-submit{height:35px;border-radius:6px;font:600 11px 'DM Sans';display:flex;align-items:center;justify-content:center;gap:8px;transition:.16s;width:100%;cursor:pointer;border:0;letter-spacing:.2px;background:#1c6384;color:#fff;box-shadow:0 4px 10px rgba(22,87,124,.2)}
+.login-submit.inspector,.login-submit.admin{background:#1c6384;color:#fff}
+.login-submit:not(:disabled):hover{background:#17506d;box-shadow:0 6px 14px rgba(22,87,124,.25);transform:translateY(-1px)}
+.login-submit:not(:disabled):active{transform:translateY(0)}
+.login-submit:disabled{opacity:.5;cursor:not-allowed;transform:none!important;box-shadow:none}
+.login-spinner{width:13px;height:13px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:loginSpin .65s linear infinite;flex:0 0 auto}
+@keyframes loginSpin{to{transform:rotate(360deg)}}
+
+/* Demo hint */
+.login-hint{background:#f8fafb;border:1px solid #e4eaed;border-radius:6px;padding:11px 13px;display:flex;justify-content:space-between;align-items:center;gap:10px}
+.login-hint span{color:#8a979f;font:500 9px 'DM Mono';letter-spacing:.3px;white-space:nowrap}
+.login-hint code{color:#286485;font:500 10px 'DM Mono';background:#e8f4f8;padding:4px 8px;border-radius:4px;border:1px solid #c5dce8}
+
+/* Remember device */
+.remember-check{display:flex;align-items:center;gap:8px;cursor:pointer;color:var(--muted);font-size:11px;user-select:none}
+.remember-check input[type="checkbox"]{width:13px;height:13px;accent-color:#1c6384;cursor:pointer;border-radius:3px;flex:0 0 auto}
+.remember-check:hover{color:var(--ink)}
+
+/* Footer + logout */
+.login-footer{text-align:center;color:#9eaab2;font:500 9px 'DM Mono';letter-spacing:1.1px;margin-top:22px}
+.logout-btn{color:var(--muted);transition:.15s}
+.logout-btn:hover{color:var(--red)!important}
+
+/* Dashboard action bar (replaces PageIntro greeting) */
+.dash-actions{display:flex;gap:9px;align-items:center;justify-content:flex-end;margin-bottom:18px}
+
+/* Clickable stat cards */
+button.stat-card-btn{text-align:left;width:100%;cursor:pointer;transition:.18s;position:relative}
+button.stat-card-btn:hover{transform:translateY(-2px);box-shadow:0 6px 18px rgba(22,45,65,.09);border-color:#c8d8e2}
+button.stat-card-btn:hover .stat-arrow{opacity:1;color:#2a7a94}
+.stat-arrow{opacity:0;transition:.18s;position:absolute;bottom:10px;right:10px}
+
+@media(max-width:560px){.login-shell{padding:24px 14px}.login-card{padding:22px 18px}.login-brand .brand strong{font-size:16px}.login-card-header h2{font-size:18px}}

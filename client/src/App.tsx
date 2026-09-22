@@ -1,11 +1,23 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState, FormEvent } from "react";
 import {
-  Activity, AlertTriangle, Archive, ArrowRight, BarChart3, Bell, Check, CheckCircle2, ChevronRight, ClipboardCheck, Cloud, CloudOff, Clock3, Cog, Database, Download, FileBarChart, FileCheck2, FileClock, FileText, Filter, HardDrive, History, Home, Laptop, Link2, ListChecks, LockKeyhole, Menu, MoreHorizontal, PackageCheck, QrCode, RefreshCw, Search, Send, Settings2, ShieldCheck, Smartphone, SlidersHorizontal, Sparkles, Table2, Tags, Upload, UserRound, Users, Wifi, X, Zap
+  Activity, AlertTriangle, Archive, ArrowRight, BarChart3, Bell, Check, CheckCircle2, ChevronRight, ClipboardCheck, Cloud, CloudOff, Clock3, Cog, Download, Eye, EyeOff, FileBarChart, FileCheck2, FileClock, FileText, Filter, HardDrive, History, Home, Link2, ListChecks, LogOut, LockKeyhole, Menu, MoreHorizontal, QrCode, RefreshCw, Search, Send, Settings2, ShieldCheck, Smartphone, SlidersHorizontal, Sparkles, Table2, Upload, Users, Wifi, X
 } from "lucide-react";
 import { Toaster, toast } from "sonner";
+import { auth, db } from "./lib/firebase";
+import {
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  signOut,
+  onAuthStateChanged,
+  setPersistence,
+  browserLocalPersistence,
+  browserSessionPersistence,
+} from "firebase/auth";
+import { doc, setDoc, getDoc } from "firebase/firestore";
 
 type NavKey = "dashboard" | "inspections" | "workspace" | "machines" | "scanner" | "evidence" | "sync" | "conflicts" | "history" | "reports" | "audit" | "admin";
 type Status = "DRAFT" | "SUBMITTED" | "UNDER REVIEW" | "APPROVED";
+type Role = "inspector" | "admin";
 
 const nav = [
   { key: "dashboard", label: "Dashboard", icon: Home }, { key: "inspections", label: "My Inspections", icon: ClipboardCheck },
@@ -25,6 +37,8 @@ function persist<T>(key: string, value: T) { localStorage.setItem(key, JSON.stri
 function read<T>(key: string, fallback: T): T { try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : fallback; } catch { return fallback; } }
 
 export default function App() {
+  const [role, setRole] = useState<Role | null>(null);
+  const [authReady, setAuthReady] = useState(false);
   const [page, setPage] = useState<NavKey>("dashboard");
   const [offline, setOffline] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -33,43 +47,166 @@ export default function App() {
   const [checklist, setChecklist] = useState(() => read("off2field-checklist", checklistSeed));
   const [resolved, setResolved] = useState(() => read("off2field-resolved", false));
 
+  // ── Firebase auth state listener ──────────────────────────────
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, async (fbUser) => {
+      if (fbUser) {
+        try {
+          const snap = await getDoc(doc(db, "users", fbUser.uid));
+          if (snap.exists()) {
+            const r = snap.data().role as Role;
+            setRole(r);
+            setPage(r === "admin" ? "reports" : "dashboard");
+          } else {
+            // Firestore doc missing — treat as logged out
+            await signOut(auth);
+            setRole(null);
+          }
+        } catch {
+          setRole(null);
+        }
+      } else {
+        setRole(null);
+      }
+      setAuthReady(true);
+    });
+    return unsub;
+  }, []);
+
   useEffect(() => { persist("off2field-pending", savedCount); }, [savedCount]);
   useEffect(() => { persist("off2field-status", inspectionStatus); }, [inspectionStatus]);
   useEffect(() => { persist("off2field-checklist", checklist); }, [checklist]);
   useEffect(() => { persist("off2field-resolved", resolved); }, [resolved]);
+  useEffect(() => {
+    if (!role) return;
+    const allowed: NavKey[] = role === "inspector"
+      ? ["dashboard","inspections","workspace","machines","scanner","evidence","sync","conflicts","history"]
+      : ["reports","audit","admin"];
+    if (!allowed.includes(page)) setPage(role === "inspector" ? "dashboard" : "reports");
+  }, [role, page]);
 
   const go = (key: NavKey) => { setPage(key); setMobileOpen(false); };
   const toggleOffline = () => { setOffline(v => { const next = !v; toast(next ? "Offline mode enabled — work will be queued locally" : "Connection restored — ready to sync"); return next; }); };
   const saveEdit = (i: number, value: string) => { setChecklist(items => items.map((item, idx) => idx === i ? { ...item, value } : item)); setSavedCount(c => c + 1); toast.success("Saved locally", { description: "Your change is protected in the local queue." }); };
   const sync = () => { setSavedCount(0); toast.success("Sync complete", { description: "All local changes are now synchronized." }); };
   const openInspection = () => go("workspace");
+  const logout = async () => { try { await signOut(auth); } catch { /**/ } setRole(null); setPage("dashboard"); };
+
+  // Show a minimal loading screen while Firebase resolves auth state
+  if (!authReady) return <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"var(--paper)"}}><Brand/></div>;
+
+  if (!role) return <LoginPage onLogin={async (r, remember) => {
+    setRole(r);
+    setPage(r === "admin" ? "reports" : "dashboard");
+  }} />;
+
+  const inspectorNav = nav.slice(0, 8);
+  const adminNav = nav.slice(8);
+  const mobileNavItems = role === "inspector" ? nav.slice(0, 5) : nav.slice(8);
 
   return <div className="app-shell">
     <Toaster position="bottom-right" richColors />
     <header className="mobile-header"><button className="icon-btn" onClick={() => setMobileOpen(v => !v)}><Menu size={20}/></button><Brand compact/><div className="mobile-spacer"/><Connection offline={offline} onClick={toggleOffline}/></header>
     <aside className={"sidebar " + (mobileOpen ? "open" : "")}>
       <div className="brand-wrap"><Brand/><button className="icon-btn close-mobile" onClick={() => setMobileOpen(false)}><X size={18}/></button></div>
-      <div className="org-switch"><div className="org-mark">TN</div><div><strong>Tamil Nadu Infrastructure</strong><span>Field Operations</span></div><ChevronRight size={15}/></div>
-      <div className="nav-label">WORKSPACE</div>
-      <nav>{nav.slice(0, 8).map(item => <NavItem key={item.key} item={item} active={page === item.key} onClick={() => go(item.key as NavKey)} badge={item.key === "sync" ? savedCount : item.key === "conflicts" && !resolved ? 1 : undefined}/>)}</nav>
-      <div className="nav-label secondary-label">INSIGHT & CONTROL</div>
-      <nav>{nav.slice(8).map(item => <NavItem key={item.key} item={item} active={page === item.key} onClick={() => go(item.key as NavKey)}/>)}</nav>
-      <div className="sidebar-bottom"><div className="device-card"><div className="device-icon"><Smartphone size={16}/></div><div><strong>DEV-0001</strong><span>Device secure · 94%</span></div><MoreHorizontal size={15}/></div><div className="profile"><div className="avatar">AK</div><div><strong>Arun Kumar</strong><span>Field Officer</span></div><Settings2 size={16}/></div></div>
+      {role === "inspector" && <><div className="nav-label">WORKSPACE</div><nav>{inspectorNav.map(item => <NavItem key={item.key} item={item} active={page === item.key} onClick={() => go(item.key as NavKey)} badge={item.key === "sync" ? savedCount : item.key === "conflicts" && !resolved ? 1 : undefined}/>)}</nav></>}
+      {role === "admin" && <><div className="nav-label">INSIGHT & CONTROL</div><nav>{adminNav.map(item => <NavItem key={item.key} item={item} active={page === item.key} onClick={() => go(item.key as NavKey)}/>)}</nav></>}
+      <div className="sidebar-bottom"><div className="device-card"><div className="device-icon"><Smartphone size={16}/></div><div><strong>DEV-0001</strong><span>Device secure · 94%</span></div><MoreHorizontal size={15}/></div><div className="profile"><div className="avatar">{role === "admin" ? "AD" : "AK"}</div><div><strong>{role === "admin" ? "Admin User" : "Arun Kumar"}</strong><span>{role === "admin" ? "Administrator" : "Field Officer"}</span></div><button className="icon-btn logout-btn" title="Sign out" onClick={logout}><LogOut size={16}/></button></div></div>
     </aside>
     <main className="main"><Topbar page={page} offline={offline} toggleOffline={toggleOffline} savedCount={savedCount} sync={sync}/>
       <div className="content">{page === "dashboard" && <Dashboard go={go} offline={offline} savedCount={savedCount} openInspection={openInspection}/>} {page === "inspections" && <Inspections openInspection={openInspection}/>} {page === "workspace" && <Workspace status={inspectionStatus} setStatus={setInspectionStatus} checklist={checklist} saveEdit={saveEdit} offline={offline} go={go} resolved={resolved} setResolved={setResolved}/>} {page === "machines" && <Machines go={go}/>} {page === "scanner" && <Scanner go={go}/>} {page === "evidence" && <Evidence savedCount={savedCount}/>} {page === "sync" && <SyncCenter savedCount={savedCount} sync={sync}/>} {page === "conflicts" && <Conflicts resolved={resolved} setResolved={setResolved}/>} {page === "history" && <HistoryPage/>} {page === "reports" && <Reports/>} {page === "audit" && <Audit/>} {page === "admin" && <Admin/>}</div>
     </main>
-    <div className="mobile-nav">{nav.slice(0, 5).map(item => <button className={page === item.key ? "active" : ""} key={item.key} onClick={() => go(item.key as NavKey)}><item.icon size={18}/><span>{item.label.split(" ")[0]}</span></button>)}</div>
+    <div className="mobile-nav">{mobileNavItems.map(item => <button className={page === item.key ? "active" : ""} key={item.key} onClick={() => go(item.key as NavKey)}><item.icon size={18}/><span>{item.label.split(" ")[0]}</span></button>)}</div>
   </div>
 }
+
+
+function LoginPage({ onLogin }: { onLogin: (role: Role, remember: boolean) => void }) {
+  const [selected, setSelected] = useState<Role | null>(null);
+  const [user, setUser] = useState("");
+  const [pass, setPass] = useState("");
+  const [showPass, setShowPass] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState("");
+  const [rememberDevice, setRememberDevice] = useState(false);
+
+  const submit = async (e: FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    if (!selected) return;
+    setErr("");
+    setLoading(true);
+    // Construct email: append domain if plain username
+    const email = user.trim().includes("@") ? user.trim() : `${user.trim()}@off2field.com`;
+    try {
+      // Set Firebase persistence based on Remember Device
+      await setPersistence(auth, rememberDevice ? browserLocalPersistence : browserSessionPersistence);
+      let credential;
+      try {
+        credential = await signInWithEmailAndPassword(auth, email, pass);
+      } catch (signInErr: any) {
+        if (signInErr.code === "auth/user-not-found" || signInErr.code === "auth/invalid-credential") {
+          // First-time setup: auto-create the account
+          credential = await createUserWithEmailAndPassword(auth, email, pass);
+        } else throw signInErr;
+      }
+      // Save / update role in Firestore
+      await setDoc(doc(db, "users", credential.user.uid), { role: selected, email }, { merge: true });
+      onLogin(selected, rememberDevice);
+    } catch (e: any) {
+      const code: string = e.code ?? "";
+      if (code === "auth/wrong-password" || code === "auth/invalid-credential") setErr("Incorrect password. Please try again.");
+      else if (code === "auth/invalid-email") setErr("Invalid username or email.");
+      else if (code === "auth/operation-not-allowed") setErr("Email/Password sign-in is not enabled. Enable it in Firebase Console → Authentication.");
+      else if (code === "auth/too-many-requests") setErr("Too many attempts. Please wait a moment and try again.");
+      else if (code === "auth/network-request-failed") setErr("Network error. Check your connection.");
+      else setErr(e.message ?? "Authentication failed.");
+    } finally {
+      setLoading(false);
+    }
+  };
+  return <div className="login-shell">
+    <div className="login-wrap">
+      <div className="login-brand"><Brand/><p className="login-tagline">Field Inspection Operating System</p></div>
+      <div className="login-card">
+        {!selected ? <>
+          <div className="login-card-header"><h2>Welcome back</h2><p>Select your role to access the system</p></div>
+          <div className="role-cards">
+            <button className="role-card inspector" onClick={() => { setSelected("inspector"); setUser(""); setPass(""); setErr(""); }}>
+              <div className="role-icon inspector"><ClipboardCheck size={22}/></div>
+              <div className="role-card-copy"><strong>Field Inspector</strong><span>Workspace &amp; Field Tools</span></div>
+              <ChevronRight size={16} className="role-arrow"/>
+            </button>
+            <button className="role-card admin" onClick={() => { setSelected("admin"); setUser(""); setPass(""); setErr(""); }}>
+              <div className="role-icon admin"><ShieldCheck size={22}/></div>
+              <div className="role-card-copy"><strong>Administrator</strong><span>Insight &amp; Control</span></div>
+              <ChevronRight size={16} className="role-arrow"/>
+            </button>
+          </div>
+        </> : <>
+          <button className="login-back" onClick={() => { setSelected(null); setErr(""); }}>← Back</button>
+          <div className={`login-role-badge ${selected}`}>{selected === "inspector" ? <ClipboardCheck size={13}/> : <ShieldCheck size={13}/>} {selected === "inspector" ? "Field Inspector" : "Administrator"}</div>
+          <div className="login-card-header"><h2>{selected === "inspector" ? "Inspector login" : "Admin login"}</h2><p>Sign in to access {selected === "inspector" ? "your field workspace" : "the admin console"}</p></div>
+          <form className="login-form" onSubmit={submit}>
+            <div className="login-field"><label>Username</label><input type="text" placeholder="Enter username" value={user} onChange={e => setUser(e.target.value)} autoFocus/></div>
+            <div className="login-field"><label>Password</label><div className="pass-wrap"><input type={showPass ? "text" : "password"} placeholder="••••••••" value={pass} onChange={e => setPass(e.target.value)}/><button type="button" className="pass-toggle" onClick={() => setShowPass(v => !v)}>{showPass ? <EyeOff size={14}/> : <Eye size={14}/>}</button></div></div>
+            <label className="remember-check"><input type="checkbox" checked={rememberDevice} onChange={e => setRememberDevice(e.target.checked)}/><span>Remember this device</span></label>
+            {err && <div className="login-error">{err}</div>}
+            <button type="submit" className={`login-submit ${selected}`} disabled={loading || !user || !pass}>{loading && <span className="login-spinner"/>}{loading ? "Signing in…" : `Sign in as ${selected === "inspector" ? "Inspector" : "Admin"}`}</button>
+          </form>
+        </>}
+      </div>
+    </div>
+  </div>;
+}
+
 
 function Brand({ compact = false }: { compact?: boolean }) { return <div className="brand"><div className="brand-symbol"><span></span><span></span><span></span></div>{!compact && <div><strong>OFF<span>2</span>FIELD</strong><small>FIELD INSPECTION OS</small></div>}</div> }
 function NavItem({ item, active, onClick, badge }: any) { return <button className={"nav-item " + (active ? "active" : "")} onClick={onClick}><item.icon size={17}/><span>{item.label}</span>{badge !== undefined && <em>{badge}</em>}</button> }
 function Connection({ offline, onClick }: { offline: boolean; onClick: () => void }) { return <button onClick={onClick} className={"connection " + (offline ? "is-offline" : "")}><span className="status-dot"></span>{offline ? "OFFLINE" : "ONLINE"}<ChevronRight size={13}/></button> }
-function Topbar({ page, offline, toggleOffline, savedCount, sync }: any) { const title = page === "workspace" ? "Inspection workspace" : page === "dashboard" ? "Operations overview" : nav.find(n => n.key === page)?.label; return <div className="topbar"><div><div className="eyebrow">TNID / FIELD OPERATIONS / 22 SEP 2026</div><h1>{title}</h1></div><div className="top-actions"><div className="local-save"><span className="pulse"></span><span><strong>Local storage protected</strong><small>Last saved just now</small></span></div><button className="top-icon"><Bell size={18}/><i></i></button><Connection offline={offline} onClick={toggleOffline}/><button className="sync-btn" onClick={sync}><RefreshCw size={15}/> Sync {savedCount > 0 && <b>{savedCount}</b>}</button></div></div> }
+function Topbar({ page, offline, toggleOffline, savedCount, sync }: any) { const title = page === "workspace" ? "Inspection workspace" : page === "dashboard" ? "Operations overview" : nav.find(n => n.key === page)?.label; return <div className="topbar"><div><h1>{title}</h1></div><div className="top-actions"><div className="local-save"><span className="pulse"></span><span><strong>Local storage protected</strong><small>Last saved just now</small></span></div><button className="top-icon"><Bell size={18}/><i></i></button><Connection offline={offline} onClick={toggleOffline}/><button className="sync-btn" onClick={sync}><RefreshCw size={15}/> Sync {savedCount > 0 && <b>{savedCount}</b>}</button></div></div> }
 
 function PageIntro({ eyebrow, title, description, actions }: any) { return <div className="page-intro"><div><div className="eyebrow">{eyebrow}</div><h2>{title}</h2><p>{description}</p></div><div className="intro-actions">{actions}</div></div> }
-function Dashboard({ go, offline, savedCount, openInspection }: any) { return <><PageIntro eyebrow="FIELD OPERATIONS / OVERVIEW" title="Good morning, Arun" description="Here’s the operational picture for your assigned inspection workload." actions={<><button className="btn secondary" onClick={() => go("scanner")}><QrCode size={16}/> Scan machine</button><button className="btn primary" onClick={openInspection}><PlusIcon/> Start inspection</button></>}/><div className="stat-grid">{[["Assigned inspections","12","+2 this week","blue",ClipboardCheck],["In progress","03","2 due today","amber",Activity],["Submitted","08","+4 this week","green",Send],["Pending review","04","Supervisor queue","violet",Clock3],["Conflicts","01","Needs resolution","red",AlertTriangle],["Approved","27","92% acceptance","teal",CheckCircle2]].map(([label,value,sub,color,Icon]: any[]) => <div className="stat-card" key={label as string}><div className={"stat-icon " + color}><Icon size={17}/></div><div className="stat-copy"><span>{label}</span><strong>{value}</strong><small className={color === "red" ? "danger-text" : ""}>{sub}</small></div><MoreHorizontal size={16} className="muted-icon"/></div>)}</div><div className="dashboard-grid"><section className="panel readiness"><PanelHeader title="Offline readiness" icon={<Wifi size={17}/>} action={<span className="ready-chip"><span></span> Device ready</span>}/><div className="readiness-body"><div className="readiness-score"><div className="score-ring"><strong>100</strong><span>%</span></div><div><strong>READY FOR<br/>OFFLINE WORK</strong><small>All field dependencies are cached</small></div></div><div className="checks">{["App available offline","Assignments downloaded","Machine data available","Templates available","Permissions cached","Storage available"].map(x => <div key={x}><CheckCircle2 size={16}/><span>{x}</span><small>Verified</small></div>)}</div></div></section><section className="panel workload"><PanelHeader title="Today’s workload" icon={<BarChart3 size={17}/>} action={<button className="text-btn" onClick={() => go("inspections")}>View all <ArrowRight size={14}/></button>}/><div className="workload-rows">{[["INS-2026-TN-0001","TRF-102 · Substation A","High","2h 14m","high"],["INS-2026-TN-0002","TRF-117 · Substation B","Medium","5h 08m","medium"],["INS-2026-TN-0003","PMP-301 · Pump House 4","Low","Tomorrow","low"]].map((x, i) => <button className="work-row" onClick={openInspection} key={x[0]}><div className="work-index">0{i+1}</div><div className="work-main"><strong>{x[0]}</strong><span>{x[1]}</span></div><span className={"priority " + x[4]}>{x[2]}</span><div className="work-time"><Clock3 size={13}/>{x[3]}</div><ChevronRight size={15}/></button>)}</div></section></div><div className="lower-grid"><section className="panel activity-panel"><PanelHeader title="Recent activity" icon={<Activity size={17}/>} action={<button className="text-btn" onClick={() => go("audit")}>Audit trail <ArrowRight size={14}/></button>}/><Timeline items={[["Inspection created","INS-2026-TN-0001","Arun Kumar","10:00","blue"],["Checklist updated","Oil Temperature · 78 °C","Saved locally","10:41","amber"],["Photo evidence added","EVD-2026-00001","TRF-102 / Item 04","10:43","purple"],["Conflict detected","Temperature value","Sync queue","10:44","red"]]}/></section><section className="panel sync-panel"><PanelHeader title="Sync health" icon={<RefreshCw size={17}/>} action={<button className="icon-btn"><MoreHorizontal size={17}/></button>}/><div className="sync-health"><div className="health-number"><strong>98.4<span>%</span></strong><small>Successful operations</small></div><div className="health-bars">{Array.from({length: 18}).map((_,i)=><i key={i} style={{height: `${18 + ((i*17)%60)}%`}}></i>)}</div></div><div className="sync-meta"><div><span className="dot green-dot"></span>Last sync <strong>Today, 09:58</strong></div><div><span className="dot amber-dot"></span>{offline ? "Offline queue" : "Pending changes"} <strong>{savedCount} operations</strong></div></div></section></div></> }
+function Dashboard({ go, offline, savedCount, openInspection }: any) { return <><div className="dash-actions"><button className="btn secondary" onClick={() => go("scanner")}><QrCode size={16}/> Scan machine</button><button className="btn primary" onClick={openInspection}><PlusIcon/> Start inspection</button></div><div className="stat-grid">{[["Assigned inspections","12","+2 this week","blue",ClipboardCheck,"inspections"],["In progress","03","2 due today","amber",Activity,"inspections"],["Submitted","08","+4 this week","green",Send,"inspections"],["Pending review","04","Supervisor queue","violet",Clock3,"inspections"],["Conflicts","01","Needs resolution","red",AlertTriangle,"conflicts"],["Approved","27","92% acceptance","teal",CheckCircle2,"history"]].map(([label,value,sub,color,Icon,dest]: any[]) => <button className="stat-card stat-card-btn" key={label as string} onClick={() => go(dest)}><div className={"stat-icon " + color}><Icon size={17}/></div><div className="stat-copy"><span>{label}</span><strong>{value}</strong><small className={color === "red" ? "danger-text" : ""}>{sub}</small></div><ChevronRight size={14} className="muted-icon stat-arrow"/></button>)}</div><div className="dashboard-grid"><section className="panel readiness"><PanelHeader title="Offline readiness" icon={<Wifi size={17}/>} action={<span className="ready-chip"><span></span> Device ready</span>}/><div className="readiness-body"><div className="readiness-score"><div className="score-ring"><strong>100</strong><span>%</span></div><div><strong>READY FOR<br/>OFFLINE WORK</strong><small>All field dependencies are cached</small></div></div><div className="checks">{["App available offline","Assignments downloaded","Machine data available","Templates available","Permissions cached","Storage available"].map(x => <div key={x}><CheckCircle2 size={16}/><span>{x}</span><small>Verified</small></div>)}</div></div></section><section className="panel workload"><PanelHeader title="Today’s workload" icon={<BarChart3 size={17}/>} action={<button className="text-btn" onClick={() => go("inspections")}>View all <ArrowRight size={14}/></button>}/><div className="workload-rows">{[["INS-2026-TN-0001","TRF-102 · Substation A","High","2h 14m","high"],["INS-2026-TN-0002","TRF-117 · Substation B","Medium","5h 08m","medium"],["INS-2026-TN-0003","PMP-301 · Pump House 4","Low","Tomorrow","low"]].map((x, i) => <button className="work-row" onClick={openInspection} key={x[0]}><div className="work-index">0{i+1}</div><div className="work-main"><strong>{x[0]}</strong><span>{x[1]}</span></div><span className={"priority " + x[4]}>{x[2]}</span><div className="work-time"><Clock3 size={13}/>{x[3]}</div><ChevronRight size={15}/></button>)}</div></section></div><div className="lower-grid"><section className="panel activity-panel"><PanelHeader title="Recent activity" icon={<Activity size={17}/>} action={<button className="text-btn" onClick={() => go("audit")}>Audit trail <ArrowRight size={14}/></button>}/><Timeline items={[["Inspection created","INS-2026-TN-0001","Arun Kumar","10:00","blue"],["Checklist updated","Oil Temperature · 78 °C","Saved locally","10:41","amber"],["Photo evidence added","EVD-2026-00001","TRF-102 / Item 04","10:43","purple"],["Conflict detected","Temperature value","Sync queue","10:44","red"]]}/></section><section className="panel sync-panel"><PanelHeader title="Sync health" icon={<RefreshCw size={17}/>} action={<button className="icon-btn"><MoreHorizontal size={17}/></button>}/><div className="sync-health"><div className="health-number"><strong>98.4<span>%</span></strong><small>Successful operations</small></div><div className="health-bars">{Array.from({length: 18}).map((_,i)=><i key={i} style={{height: `${18 + ((i*17)%60)}%`}}></i>)}</div></div><div className="sync-meta"><div><span className="dot green-dot"></span>Last sync <strong>Today, 09:58</strong></div><div><span className="dot amber-dot"></span>{offline ? "Offline queue" : "Pending changes"} <strong>{savedCount} operations</strong></div></div></section></div></> }
 function PanelHeader({ title, icon, action }: any) { return <div className="panel-header"><div><span className="panel-icon">{icon}</span><h3>{title}</h3></div>{action}</div> }
 function Timeline({ items }: any) { return <div className="timeline">{items.map((x: any) => <div className="timeline-item" key={x[1]}><div className={"timeline-dot " + x[4]}></div><div><strong>{x[0]}</strong><span>{x[1]}</span><small>{x[2]}</small></div><time>{x[3]}</time></div>)}</div> }
 function PlusIcon(){return <span className="plus-icon">+</span>}
