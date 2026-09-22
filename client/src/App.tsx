@@ -25,13 +25,189 @@ const nav = [
   { key: "sync", label: "Sync Center", icon: RefreshCw }, { key: "conflicts", label: "Conflicts", icon: AlertTriangle }, { key: "history", label: "Inspection History", icon: History },
   { key: "reports", label: "Reports", icon: FileBarChart }, { key: "audit", label: "Audit Trail", icon: FileClock }, { key: "admin", label: "Admin Console", icon: ShieldCheck },
 ];
-const checklistSeed = [
-  { id: "01", label: "Oil Leakage", value: "No Leakage", helper: "Visual inspection", required: true, tone: "green" },
-  { id: "02", label: "Oil Temperature", value: "78 °C", helper: "Previous: 72 °C", required: true, tone: "amber" },
-  { id: "03", label: "Oil Level", value: "82 %", helper: "Within operating range", required: true, tone: "green" },
-  { id: "04", label: "Equipment Condition", value: "Normal", helper: "No abnormal noise", required: true, tone: "green" },
-  { id: "05", label: "Safety Status", value: "Safe", helper: "LOTO verified", required: true, tone: "green" },
-];
+const machineTemplates: Record<string, { name: string; location: string; category: string; type: string; checklist: Array<{ id: string; label: string; value: string; helper: string; required: boolean; tone: string }> }> = {
+  // ── 1. TRANSFORMERS (TRF) ──
+  "TRF-102": {
+    name: "Transformer T-102",
+    location: "Substation A · Chennai North",
+    category: "Transformers",
+    type: "Step-Down Transformer (132 / 33 kV)",
+    checklist: [
+      { id: "01", label: "Oil Leakage", value: "No Leakage", helper: "Visual inspection of radiator & conservator tank", required: true, tone: "green" },
+      { id: "02", label: "Oil Temperature", value: "78 °C", helper: "Normal operating limit: 85 °C", required: true, tone: "amber" },
+      { id: "03", label: "Oil Level Gauge", value: "82 %", helper: "Conservator level verified", required: true, tone: "green" },
+      { id: "04", label: "HV & LV Bushing Status", value: "Clean / Intact", helper: "Check for cracks or flashover traces", required: true, tone: "green" },
+      { id: "05", label: "Winding Temperature", value: "65 °C", helper: "Thermal sensor verified", required: true, tone: "green" },
+      { id: "06", label: "Safety Interlock & Relay", value: "Safe", helper: "LOTO & ground earth verified", required: true, tone: "green" },
+    ]
+  },
+  "TRF-117": {
+    name: "Transformer T-117",
+    location: "Substation B · Tambaram South",
+    category: "Transformers",
+    type: "Power Transformer (132 / 33 kV)",
+    checklist: [
+      { id: "01", label: "Oil Dielectric Strength", value: "60 kV", helper: "BDV breakdown voltage test", required: true, tone: "green" },
+      { id: "02", label: "Oil Temperature", value: "71 °C", helper: "Previous reading: 68 °C", required: true, tone: "green" },
+      { id: "03", label: "Cooling Fan Operation", value: "Running / Normal", helper: "OFAF cooling active", required: true, tone: "green" },
+      { id: "04", label: "Tap Changer Position", value: "Tap 5", helper: "Voltage regulation within ±2%", required: true, tone: "green" },
+      { id: "05", label: "Safety & Buchholz Relay", value: "Passed", helper: "No gas accumulation detected", required: true, tone: "green" },
+    ]
+  },
+  "TRF-203": {
+    name: "Transformer T-203",
+    location: "Substation C · Guindy West",
+    category: "Transformers",
+    type: "EHV Transformer (220 / 110 kV)",
+    checklist: [
+      { id: "01", label: "SF6 Gas Pressure", value: "6.1 bar", helper: "Nominal pressure: 6.0 bar", required: true, tone: "green" },
+      { id: "02", label: "Dissolved Gas Analysis (DGA)", value: "Normal", helper: "Key gas levels within IEEE C57.104 limits", required: true, tone: "green" },
+      { id: "03", label: "Silica Gel Breather", value: "Blue (Good)", helper: "Desiccant moisture check", required: true, tone: "green" },
+      { id: "04", label: "Surge Arrester Leakage", value: "0.4 mA", helper: "Third harmonic resistive current", required: true, tone: "green" },
+      { id: "05", label: "Safety Status", value: "Under Maintenance", helper: "Permit to work issued", required: true, tone: "amber" },
+    ]
+  },
+  "TRF-305": {
+    name: "Distribution Transformer T-305",
+    location: "Feeder Yard 2 · Avadi East",
+    category: "Transformers",
+    type: "Pole Mounted Transformer (33 / 11 kV)",
+    checklist: [
+      { id: "01", label: "Oil Level & Color", value: "Normal / Pale", helper: "Visual glass gauge check", required: true, tone: "green" },
+      { id: "02", label: "Lightning Arrester", value: "Intact", helper: "Check surge counter & gap", required: true, tone: "green" },
+      { id: "03", label: "Earthing Resistance", value: "0.8 Ω", helper: "Sub-1 ohm earth pit test", required: true, tone: "green" },
+      { id: "04", label: "Bushing Terminal Tightness", value: "Torqued", helper: "Check thermal hot spots", required: true, tone: "green" },
+      { id: "05", label: "Fusing Link Condition", value: "OK", helper: "DO fuse element intact", required: true, tone: "green" },
+    ]
+  },
+
+  // ── 2. PUMPS & MOTORS (PMP / MTR) ──
+  "PMP-301": {
+    name: "Cooling Pump P-301",
+    location: "Pump House 4 · Ennore Bay",
+    category: "Pumps & Motors",
+    type: "Centrifugal Water Pump (45 kW)",
+    checklist: [
+      { id: "01", label: "Vibration Velocity", value: "1.8 mm/s", helper: "ISO 10816 Class II limit: 2.8 mm/s", required: true, tone: "green" },
+      { id: "02", label: "Bearing Drive-End Temp", value: "54 °C", helper: "Max allowable: 75 °C", required: true, tone: "green" },
+      { id: "03", label: "Suction & Discharge Pressure", value: "4.2 bar", helper: "Rated pressure: 4.5 bar", required: true, tone: "amber" },
+      { id: "04", label: "Mechanical Gland Seal", value: "No Leakage", helper: "Visual seal inspection", required: true, tone: "green" },
+      { id: "05", label: "Motor Phase Current", value: "42 A", helper: "Balanced 3-phase current draw", required: true, tone: "green" },
+      { id: "06", label: "Emergency Stop Button", value: "Functional", helper: "Local trip switch verified", required: true, tone: "green" },
+    ]
+  },
+  "PMP-302": {
+    name: "Boiler Feed Pump P-302",
+    location: "Thermal Station 1 · Boiler Unit 3",
+    category: "Pumps & Motors",
+    type: "Multi-Stage High Pressure Pump (110 kW)",
+    checklist: [
+      { id: "01", label: "Flow Discharge Rate", value: "240 m³/h", helper: "Rated capacity: 250 m³/h", required: true, tone: "green" },
+      { id: "02", label: "Non-Drive Bearing Temp", value: "62 °C", helper: "Cooling water flush active", required: true, tone: "green" },
+      { id: "03", label: "Coupling Alignment", value: "0.02 mm", helper: "Laser alignment verified", required: true, tone: "green" },
+      { id: "04", label: "Lubrication Oil Level", value: "Full", helper: "Synthetic ISO VG 68 oil", required: true, tone: "green" },
+      { id: "05", label: "Motor Winding Insulation", value: "150 MΩ", helper: "Megger test at 1000V", required: true, tone: "green" },
+    ]
+  },
+  "MTR-105": {
+    name: "Induction Motor M-105",
+    location: "Compressor House · Manali Plant",
+    category: "Pumps & Motors",
+    type: "Heavy Duty 3-Phase Motor (75 HP)",
+    checklist: [
+      { id: "01", label: "Stator Winding Temperature", value: "68 °C", helper: "Class F insulation limit: 105 °C", required: true, tone: "green" },
+      { id: "02", label: "Full Load Current Draw", value: "98 A", helper: "Nameplate rating: 102 A", required: true, tone: "green" },
+      { id: "03", label: "Shaft Radial Runout", value: "0.01 mm", helper: "Dial indicator test", required: true, tone: "green" },
+      { id: "04", label: "Terminal Box Connections", value: "Tight", helper: "Crimped lug inspection", required: true, tone: "green" },
+      { id: "05", label: "Vibration Spectrum", value: "Normal", helper: "No unbalance or misalignment peak", required: true, tone: "green" },
+    ]
+  },
+
+  // ── 3. GENERATORS & TURBINES (GEN / TRB) ──
+  "GEN-405": {
+    name: "Diesel Generator DG-405",
+    location: "Power Plant 2 · Auxiliary Bay",
+    category: "Generators & Turbines",
+    type: "Emergency Generator (500 kVA)",
+    checklist: [
+      { id: "01", label: "Fuel Tank Storage Level", value: "95 %", helper: "Daily day-tank check", required: true, tone: "green" },
+      { id: "02", label: "Lube Oil Pressure", value: "4.5 bar", helper: "Engine speed: 1500 RPM", required: true, tone: "green" },
+      { id: "03", label: "Coolant Temperature", value: "82 °C", helper: "Thermostat open threshold: 88 °C", required: true, tone: "green" },
+      { id: "04", label: "Battery Starter Voltage", value: "26.4 V DC", helper: "Float charger operational", required: true, tone: "green" },
+      { id: "05", label: "Automatic Transfer Switch", value: "Ready / Auto", helper: "Grid failure backup standby", required: true, tone: "green" },
+      { id: "06", label: "Exhaust Smoke Density", value: "Clear", helper: "Visual emissions check", required: true, tone: "green" },
+    ]
+  },
+  "GEN-502": {
+    name: "Gas Turbine Generator GT-502",
+    location: "Combined Cycle Plant · Basin Bridge",
+    category: "Generators & Turbines",
+    type: "Gas Turbine Generator Set (125 MVA)",
+    checklist: [
+      { id: "01", label: "Rotor Speed (RPM)", value: "3000 RPM", helper: "Grid frequency synchronized at 50 Hz", required: true, tone: "green" },
+      { id: "02", label: "Exciter Field Voltage", value: "180 V DC", helper: "AVR loop response nominal", required: true, tone: "green" },
+      { id: "03", label: "Hydrogen Coolant Pressure", value: "3.5 bar", helper: "Purity level: 98.5% H2", required: true, tone: "green" },
+      { id: "04", label: "Stator Water Flow", value: "35 m³/h", helper: "Deionized water loop", required: true, tone: "green" },
+      { id: "05", label: "Combustion Chamber Pressure", value: "14.2 bar", helper: "Natural gas fuel pressure", required: true, tone: "green" },
+    ]
+  },
+
+  // ── 4. SWITCHGEAR & BREAKERS (SWG / CBK) ──
+  "CBK-201": {
+    name: "Vacuum Circuit Breaker VCB-201",
+    location: "Control Room A · Substation 11kV",
+    category: "Switchgear & Breakers",
+    type: "Medium Voltage VCB (11 kV / 1250 A)",
+    checklist: [
+      { id: "01", label: "Vacuum Bottle Integrity", value: "Passed", helper: "High-pot test at 28 kV AC", required: true, tone: "green" },
+      { id: "02", label: "Contact Resistance (Ductor)", value: "28 µΩ", helper: "Limit: < 40 µΩ", required: true, tone: "green" },
+      { id: "03", label: "Closing / Opening Time", value: "35 ms / 25 ms", helper: "Timing analyzer test", required: true, tone: "green" },
+      { id: "04", label: "Spring Charge Motor", value: "Charged", helper: "Automatic recharge verified", required: true, tone: "green" },
+      { id: "05", label: "Interlock Mechanism", value: "Locked", helper: "Mechanical & electrical interlocks", required: true, tone: "green" },
+    ]
+  },
+  "SWG-501": {
+    name: "Gas Insulated Switchgear GIS-501",
+    location: "GIS Bay · 220kV Underground Substation",
+    category: "Switchgear & Breakers",
+    type: "SF6 Encapsulated GIS (220 kV)",
+    checklist: [
+      { id: "01", label: "SF6 Compartment Density", value: "6.4 bar", helper: "Temperature compensated density gauge", required: true, tone: "green" },
+      { id: "02", label: "Partial Discharge (PD) Sensor", value: "< 5 pC", helper: "UHF online PD monitoring", required: true, tone: "green" },
+      { id: "03", label: "Earthing Switch Status", value: "Open / Disconnected", helper: "Busbar isolator position", required: true, tone: "green" },
+      { id: "04", label: "SF6 Moisture Content", value: "120 ppm", helper: "Max allowable: 250 ppm", required: true, tone: "green" },
+      { id: "05", label: "Control Cabinet Heater", value: "Active", helper: "Anti-condensation heater ON", required: true, tone: "green" },
+    ]
+  },
+
+  // ── 5. RENEWABLES & POWER SYSTEMS (SLR / BTY) ──
+  "SLR-101": {
+    name: "Solar String Inverter INV-101",
+    location: "Solar Farm 3 · Cheyyar Yard",
+    category: "Renewables & Power Systems",
+    type: "Utility Scale Grid Inverter (250 kW)",
+    checklist: [
+      { id: "01", label: "DC Input Array Voltage", value: "850 V DC", helper: "MPPT operating voltage range", required: true, tone: "green" },
+      { id: "02", label: "AC Output Power", value: "245 kW", helper: "Conversion efficiency: 98.6%", required: true, tone: "green" },
+      { id: "03", label: "Heatsink IGBT Temp", value: "58 °C", helper: "Forced air cooling active", required: true, tone: "green" },
+      { id: "04", label: "Grid Frequency Lock", value: "50.02 Hz", helper: "Anti-islanding protection active", required: true, tone: "green" },
+      { id: "05", label: "Surge Protection Device", value: "Green / OK", helper: "Type II DC SPD status", required: true, tone: "green" },
+    ]
+  },
+  "BTY-202": {
+    name: "Substation Battery Bank BTY-202",
+    location: "DC Power Room · Substation A",
+    category: "Renewables & Power Systems",
+    type: "VRLA Lead-Acid Battery Bank (220V DC)",
+    checklist: [
+      { id: "01", label: "Total Bank Float Voltage", value: "242 V DC", helper: "2.25 V per cell float charge", required: true, tone: "green" },
+      { id: "02", label: "Individual Cell Pilot Temp", value: "24 °C", helper: "Climate controlled battery room", required: true, tone: "green" },
+      { id: "03", label: "Specific Gravity / Impedance", value: "12.5 mΩ", helper: "Internal cell resistance test", required: true, tone: "green" },
+      { id: "04", label: "DC Earth Fault Detector", value: "No Leakage", helper: "Insulation resistance > 1 MΩ", required: true, tone: "green" },
+      { id: "05", label: "Terminal Torque Check", value: "Verified", helper: "No corrosion or loose bolts", required: true, tone: "green" },
+    ]
+  }
+};
 
 function persist<T>(key: string, value: T) { localStorage.setItem(key, JSON.stringify(value)); }
 function read<T>(key: string, fallback: T): T { try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : fallback; } catch { return fallback; } }
@@ -44,8 +220,19 @@ export default function App() {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [savedCount, setSavedCount] = useState(() => read("off2field-pending", 2));
   const [inspectionStatus, setInspectionStatus] = useState<Status>(() => read("off2field-status", "DRAFT"));
-  const [checklist, setChecklist] = useState(() => read("off2field-checklist", checklistSeed));
+  const [selectedMachineKey, setSelectedMachineKey] = useState("TRF-102");
+  const [manualMachineCode, setManualMachineCode] = useState("TRF-102");
+  const [activeInspectionId, setActiveInspectionId] = useState("INS-2026-TN-0001");
+  const [submittedAt, setSubmittedAt] = useState<string | null>(null);
+  const [checklist, setChecklist] = useState(() => machineTemplates["TRF-102"].checklist);
   const [resolved, setResolved] = useState(() => read("off2field-resolved", false));
+  const [showSubmittedModal, setShowSubmittedModal] = useState(false);
+  const [inspectionsList, setInspectionsList] = useState([
+    { id: "INS-2026-TN-0001", machine: "TRF-102", site: "Substation A", status: "DRAFT", priority: "HIGH", date: "23 Sep 2026", completion: "68%" },
+    { id: "INS-2026-TN-0002", machine: "TRF-117", site: "Substation B", status: "SUBMITTED", priority: "MEDIUM", date: "21 Sep 2026", completion: "100%" },
+    { id: "INS-2026-TN-0003", machine: "PMP-301", site: "Pump House 4", status: "UNDER REVIEW", priority: "LOW", date: "20 Sep 2026", completion: "100%" },
+    { id: "INS-2026-TN-0004", machine: "TRF-203", site: "Substation C", status: "APPROVED", priority: "MEDIUM", date: "18 Sep 2026", completion: "100%" },
+  ]);
 
   // ── Firebase auth state listener ──────────────────────────────
   useEffect(() => {
@@ -87,9 +274,64 @@ export default function App() {
 
   const go = (key: NavKey) => { setPage(key); setMobileOpen(false); };
   const toggleOffline = () => { setOffline(v => { const next = !v; toast(next ? "Offline mode enabled — work will be queued locally" : "Connection restored — ready to sync"); return next; }); };
-  const saveEdit = (i: number, value: string) => { setChecklist(items => items.map((item, idx) => idx === i ? { ...item, value } : item)); setSavedCount(c => c + 1); toast.success("Saved locally", { description: "Your change is protected in the local queue." }); };
+  const saveEdit = (i: number, value: string) => { setChecklist(items => items.map((item, idx) => idx === i ? { ...item, value } : item)); setSavedCount(c => c + 1); };
   const sync = () => { setSavedCount(0); toast.success("Sync complete", { description: "All local changes are now synchronized." }); };
   const openInspection = () => go("workspace");
+
+  const startNewInspection = (machineKey?: string) => {
+    const nextNum = inspectionsList.length + 1;
+    const newId = `INS-2026-TN-00${nextNum < 10 ? '0' + nextNum : nextNum}`;
+    const targetKey = machineKey || "TRF-102";
+    setActiveInspectionId(newId);
+    setSelectedMachineKey(targetKey);
+    setManualMachineCode(targetKey);
+    setInspectionStatus("DRAFT");
+    setSubmittedAt(null);
+    if (machineTemplates[targetKey]) {
+      setChecklist(machineTemplates[targetKey].checklist);
+    }
+    setInspectionsList(prev => [
+      { id: newId, machine: targetKey, site: machineTemplates[targetKey]?.location.split("·")[0].trim() || "Field Site", status: "DRAFT", priority: "HIGH", date: "Today", completion: "0%" },
+      ...prev
+    ]);
+    go("workspace");
+  };
+
+  const handleInspectionSubmit = () => {
+    const timeStr = new Date().toLocaleString("en-IN", {
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: true,
+    });
+    setInspectionStatus("SUBMITTED");
+    setSubmittedAt(timeStr);
+    setShowSubmittedModal(true);
+    toast.success("Inspection submitted for review");
+
+    setInspectionsList(prev => {
+      const code = manualMachineCode || selectedMachineKey;
+      const site = machineTemplates[selectedMachineKey]?.location.split("·")[0].trim() || "Field Site";
+      const index = prev.findIndex(x => x.id === activeInspectionId);
+      const record = {
+        id: activeInspectionId,
+        machine: code,
+        site: site,
+        status: "SUBMITTED",
+        priority: "HIGH",
+        date: "Today",
+        completion: "100%",
+      };
+      if (index >= 0) {
+        const copy = [...prev];
+        copy[index] = record;
+        return copy;
+      }
+      return [record, ...prev];
+    });
+  };
   const logout = async () => { try { await signOut(auth); } catch { /**/ } setRole(null); setPage("dashboard"); };
 
   // Show a minimal loading screen while Firebase resolves auth state
@@ -109,20 +351,55 @@ export default function App() {
     <header className="mobile-header"><button className="icon-btn" onClick={() => setMobileOpen(v => !v)}><Menu size={20}/></button><Brand compact/><div className="mobile-spacer"/><Connection offline={offline} onClick={toggleOffline}/></header>
     <aside className={"sidebar " + (mobileOpen ? "open" : "")}>
       <div className="brand-wrap"><Brand/><button className="icon-btn close-mobile" onClick={() => setMobileOpen(false)}><X size={18}/></button></div>
-      {role === "inspector" && <><div className="nav-label">WORKSPACE</div><nav>{inspectorNav.map(item => <NavItem key={item.key} item={item} active={page === item.key} onClick={() => go(item.key as NavKey)} badge={item.key === "sync" ? savedCount : item.key === "conflicts" && !resolved ? 1 : undefined}/>)}</nav></>}
+      {role === "inspector" && <><div className="nav-label">WORKSPACE</div><nav>{inspectorNav.map(item => <NavItem key={item.key} item={item} active={page === item.key || (page === "workspace" && item.key === "inspections")} onClick={() => go(item.key as NavKey)} badge={item.key === "sync" ? savedCount : item.key === "conflicts" && !resolved ? 1 : undefined}/>)}</nav></>}
       {role === "admin" && <><div className="nav-label">INSIGHT & CONTROL</div><nav>{adminNav.map(item => <NavItem key={item.key} item={item} active={page === item.key} onClick={() => go(item.key as NavKey)}/>)}</nav></>}
-      <div className="sidebar-bottom"><div className="device-card"><div className="device-icon"><Smartphone size={16}/></div><div><strong>DEV-0001</strong><span>Device secure · 94%</span></div><MoreHorizontal size={15}/></div><div className="profile"><div className="avatar">{role === "admin" ? "AD" : "AK"}</div><div><strong>{role === "admin" ? "Admin User" : "Arun Kumar"}</strong><span>{role === "admin" ? "Administrator" : "Field Officer"}</span></div><button className="icon-btn logout-btn" title="Sign out" onClick={logout}><LogOut size={16}/></button></div></div>
+      <div className="sidebar-bottom"><div className="profile"><div className="avatar">{role === "admin" ? "AD" : "AK"}</div><div><strong>{role === "admin" ? "Admin User" : "Arun Kumar"}</strong><span>{role === "admin" ? "Administrator" : "Field Officer"}</span></div><button className="icon-btn logout-btn" title="Sign out" onClick={logout}><LogOut size={16}/></button></div></div>
     </aside>
     <main className="main"><Topbar page={page} offline={offline} toggleOffline={toggleOffline} savedCount={savedCount} sync={sync}/>
-      <div className="content">{page === "dashboard" && <Dashboard go={go} offline={offline} savedCount={savedCount} openInspection={openInspection}/>} {page === "inspections" && <Inspections openInspection={openInspection}/>} {page === "workspace" && <Workspace status={inspectionStatus} setStatus={setInspectionStatus} checklist={checklist} saveEdit={saveEdit} offline={offline} go={go} resolved={resolved} setResolved={setResolved}/>} {page === "machines" && <Machines go={go}/>} {page === "scanner" && <Scanner go={go}/>} {page === "evidence" && <Evidence savedCount={savedCount}/>} {page === "sync" && <SyncCenter savedCount={savedCount} sync={sync}/>} {page === "conflicts" && <Conflicts resolved={resolved} setResolved={setResolved}/>} {page === "history" && <HistoryPage/>} {page === "reports" && <Reports/>} {page === "audit" && <Audit/>} {page === "admin" && <Admin/>}</div>
+      <div className="content">{page === "dashboard" && <Dashboard go={go} offline={offline} savedCount={savedCount} openInspection={openInspection}/>} {page === "inspections" && <Inspections openInspection={openInspection} startNewInspection={startNewInspection} inspectionsList={inspectionsList}/>} {page === "workspace" && <Workspace status={inspectionStatus} setStatus={setInspectionStatus} checklist={checklist} setChecklist={setChecklist} saveEdit={saveEdit} offline={offline} go={go} resolved={resolved} setResolved={setResolved} selectedMachineKey={selectedMachineKey} setSelectedMachineKey={setSelectedMachineKey} manualMachineCode={manualMachineCode} setManualMachineCode={setManualMachineCode} activeInspectionId={activeInspectionId} submittedAt={submittedAt} onSubmitClick={handleInspectionSubmit}/>} {page === "machines" && <Machines go={go} startNewInspection={startNewInspection}/>} {page === "scanner" && <Scanner go={go} startNewInspection={startNewInspection}/>} {page === "evidence" && <Evidence savedCount={savedCount}/>} {page === "sync" && <SyncCenter savedCount={savedCount} sync={sync}/>} {page === "conflicts" && <Conflicts resolved={resolved} setResolved={setResolved}/>} {page === "history" && <HistoryPage/>} {page === "reports" && <Reports/>} {page === "audit" && <Audit/>} {page === "admin" && <Admin/>}</div>
     </main>
     <div className="mobile-nav">{mobileNavItems.map(item => <button className={page === item.key ? "active" : ""} key={item.key} onClick={() => go(item.key as NavKey)}><item.icon size={18}/><span>{item.label.split(" ")[0]}</span></button>)}</div>
-  </div>
+
+    {/* ── Inspection Submitted Modal Popup ── */}
+    {showSubmittedModal && (
+      <div className="modal-overlay" onClick={() => setShowSubmittedModal(false)}>
+        <div className="modal-card" onClick={e => e.stopPropagation()}>
+          <div className="modal-header">
+            <div className="modal-icon-badge"><CheckCircle2 size={30}/></div>
+            <h3>Inspection Submitted Successfully!</h3>
+            <p>Your inspection record has been validated, saved locally, and queued for supervisor review.</p>
+          </div>
+          <div className="modal-body">
+            <div className="modal-details-grid">
+              <div className="modal-detail-item"><span>Inspection ID</span><strong>INS-2026-TN-0001</strong></div>
+              <div className="modal-detail-item"><span>Machine Code</span><strong className="mono">{manualMachineCode || selectedMachineKey}</strong></div>
+              <div className="modal-detail-item"><span>Machine Name</span><strong>{machineTemplates[selectedMachineKey]?.name || "Equipment Record"}</strong></div>
+              <div className="modal-detail-item"><span>Location</span><strong>{machineTemplates[selectedMachineKey]?.location || "Field Substation"}</strong></div>
+              <div className="modal-detail-item"><span>Status</span><StatusChip status="SUBMITTED"/></div>
+              <div className="modal-detail-item"><span>Submitted At</span><strong>Today, {new Date().toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})}</strong></div>
+              <div className="modal-detail-item"><span>Audit Ref</span><strong className="mono">OP-SUBMIT-2026</strong></div>
+            </div>
+            <div className="modal-note">
+              <ShieldCheck size={16}/>
+              <span>Tamper-proof audit record created. Saved offline &amp; ready for cloud sync.</span>
+            </div>
+          </div>
+          <div className="modal-actions">
+            <button className="btn secondary" onClick={() => { setShowSubmittedModal(false); go("inspections"); }}>
+              <ClipboardCheck size={15}/> View My Inspections
+            </button>
+            <button className="btn primary" onClick={() => setShowSubmittedModal(false)}>
+              <Check size={15}/> Done &amp; Close
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+  </div>;
 }
 
 
 function LoginPage({ onLogin }: { onLogin: (role: Role, remember: boolean) => void }) {
-  const [selected, setSelected] = useState<Role | null>(null);
   const [user, setUser] = useState("");
   const [pass, setPass] = useState("");
   const [showPass, setShowPass] = useState(false);
@@ -132,26 +409,32 @@ function LoginPage({ onLogin }: { onLogin: (role: Role, remember: boolean) => vo
 
   const submit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    if (!selected) return;
     setErr("");
     setLoading(true);
-    // Construct email: append domain if plain username
     const email = user.trim().includes("@") ? user.trim() : `${user.trim()}@off2field.com`;
     try {
-      // Set Firebase persistence based on Remember Device
       await setPersistence(auth, rememberDevice ? browserLocalPersistence : browserSessionPersistence);
       let credential;
       try {
         credential = await signInWithEmailAndPassword(auth, email, pass);
       } catch (signInErr: any) {
         if (signInErr.code === "auth/user-not-found" || signInErr.code === "auth/invalid-credential") {
-          // First-time setup: auto-create the account
           credential = await createUserWithEmailAndPassword(auth, email, pass);
         } else throw signInErr;
       }
-      // Save / update role in Firestore
-      await setDoc(doc(db, "users", credential.user.uid), { role: selected, email }, { merge: true });
-      onLogin(selected, rememberDevice);
+      
+      let r: Role = user.toLowerCase().includes("admin") ? "admin" : "inspector";
+      try {
+        const snap = await getDoc(doc(db, "users", credential.user.uid));
+        if (snap.exists() && snap.data().role) {
+          r = snap.data().role as Role;
+        } else {
+          await setDoc(doc(db, "users", credential.user.uid), { role: r, email }, { merge: true });
+        }
+      } catch {
+        // Fallback
+      }
+      onLogin(r, rememberDevice);
     } catch (e: any) {
       const code: string = e.code ?? "";
       if (code === "auth/wrong-password" || code === "auth/invalid-credential") setErr("Incorrect password. Please try again.");
@@ -164,36 +447,19 @@ function LoginPage({ onLogin }: { onLogin: (role: Role, remember: boolean) => vo
       setLoading(false);
     }
   };
+
   return <div className="login-shell">
     <div className="login-wrap">
       <div className="login-brand"><Brand/><p className="login-tagline">Field Inspection Operating System</p></div>
       <div className="login-card">
-        {!selected ? <>
-          <div className="login-card-header"><h2>Welcome back</h2><p>Select your role to access the system</p></div>
-          <div className="role-cards">
-            <button className="role-card inspector" onClick={() => { setSelected("inspector"); setUser(""); setPass(""); setErr(""); }}>
-              <div className="role-icon inspector"><ClipboardCheck size={22}/></div>
-              <div className="role-card-copy"><strong>Field Inspector</strong><span>Workspace &amp; Field Tools</span></div>
-              <ChevronRight size={16} className="role-arrow"/>
-            </button>
-            <button className="role-card admin" onClick={() => { setSelected("admin"); setUser(""); setPass(""); setErr(""); }}>
-              <div className="role-icon admin"><ShieldCheck size={22}/></div>
-              <div className="role-card-copy"><strong>Administrator</strong><span>Insight &amp; Control</span></div>
-              <ChevronRight size={16} className="role-arrow"/>
-            </button>
-          </div>
-        </> : <>
-          <button className="login-back" onClick={() => { setSelected(null); setErr(""); }}>← Back</button>
-          <div className={`login-role-badge ${selected}`}>{selected === "inspector" ? <ClipboardCheck size={13}/> : <ShieldCheck size={13}/>} {selected === "inspector" ? "Field Inspector" : "Administrator"}</div>
-          <div className="login-card-header"><h2>{selected === "inspector" ? "Inspector login" : "Admin login"}</h2><p>Sign in to access {selected === "inspector" ? "your field workspace" : "the admin console"}</p></div>
-          <form className="login-form" onSubmit={submit}>
-            <div className="login-field"><label>Username</label><input type="text" placeholder="Enter username" value={user} onChange={e => setUser(e.target.value)} autoFocus/></div>
-            <div className="login-field"><label>Password</label><div className="pass-wrap"><input type={showPass ? "text" : "password"} placeholder="••••••••" value={pass} onChange={e => setPass(e.target.value)}/><button type="button" className="pass-toggle" onClick={() => setShowPass(v => !v)}>{showPass ? <EyeOff size={14}/> : <Eye size={14}/>}</button></div></div>
-            <label className="remember-check"><input type="checkbox" checked={rememberDevice} onChange={e => setRememberDevice(e.target.checked)}/><span>Remember this device</span></label>
-            {err && <div className="login-error">{err}</div>}
-            <button type="submit" className={`login-submit ${selected}`} disabled={loading || !user || !pass}>{loading && <span className="login-spinner"/>}{loading ? "Signing in…" : `Sign in as ${selected === "inspector" ? "Inspector" : "Admin"}`}</button>
-          </form>
-        </>}
+        <div className="login-card-header"><h2>Sign In</h2><p>Enter your credentials to access your workspace</p></div>
+        <form className="login-form" onSubmit={submit}>
+          <div className="login-field"><label>Username or Email</label><input type="text" placeholder="Enter username or email" value={user} onChange={e => setUser(e.target.value)} autoFocus/></div>
+          <div className="login-field"><label>Password</label><div className="pass-wrap"><input type={showPass ? "text" : "password"} placeholder="••••••••" value={pass} onChange={e => setPass(e.target.value)}/><button type="button" className="pass-toggle" onClick={() => setShowPass(v => !v)}>{showPass ? <EyeOff size={14}/> : <Eye size={14}/>}</button></div></div>
+          <label className="remember-check"><input type="checkbox" checked={rememberDevice} onChange={e => setRememberDevice(e.target.checked)}/><span>Remember this device</span></label>
+          {err && <div className="login-error">{err}</div>}
+          <button type="submit" className="login-submit inspector" disabled={loading || !user || !pass}>{loading && <span className="login-spinner"/>}{loading ? "Signing in…" : "Sign in"}</button>
+        </form>
       </div>
     </div>
   </div>;
@@ -211,15 +477,116 @@ function PanelHeader({ title, icon, action }: any) { return <div className="pane
 function Timeline({ items }: any) { return <div className="timeline">{items.map((x: any) => <div className="timeline-item" key={x[1]}><div className={"timeline-dot " + x[4]}></div><div><strong>{x[0]}</strong><span>{x[1]}</span><small>{x[2]}</small></div><time>{x[3]}</time></div>)}</div> }
 function PlusIcon(){return <span className="plus-icon">+</span>}
 
-function Inspections({ openInspection }: any) { const [q,setQ]=useState(""); const rows = [["INS-2026-TN-0001","TRF-102","Substation A","DRAFT","HIGH","22 Sep 2026","68%"],["INS-2026-TN-0002","TRF-117","Substation B","SUBMITTED","MEDIUM","21 Sep 2026","100%"],["INS-2026-TN-0003","PMP-301","Pump House 4","UNDER REVIEW","LOW","20 Sep 2026","100%"],["INS-2026-TN-0004","TRF-203","Substation C","APPROVED","MEDIUM","18 Sep 2026","100%"]]; const filtered=rows.filter(r=>r.join(" ").toLowerCase().includes(q.toLowerCase())); return <><PageIntro eyebrow="WORKSPACE / INSPECTIONS" title="My inspections" description="Manage field inspections, completion state, and submission readiness." actions={<button className="btn primary" onClick={openInspection}><PlusIcon/> New inspection</button>}/><div className="toolbar"><div className="searchbox"><Search size={16}/><input placeholder="Search by inspection ID, machine, or site" value={q} onChange={e=>setQ(e.target.value)}/></div><button className="btn secondary"><Filter size={15}/> Filters <span className="filter-count">2</span></button><button className="btn secondary"><SlidersHorizontal size={15}/> Sort</button><div className="view-toggle"><button className="active"><Table2 size={16}/></button><button><ListChecks size={16}/></button></div></div><section className="panel table-panel"><div className="table-top"><div><strong>Inspection register</strong><span>{filtered.length} records · Updated just now</span></div><button className="text-btn"><Download size={14}/> Export CSV</button></div><div className="table-wrap"><table><thead><tr><th>Inspection ID</th><th>Machine / site</th><th>Status</th><th>Priority</th><th>Last updated</th><th>Completion</th><th></th></tr></thead><tbody>{filtered.map(r=><tr key={r[0]} onClick={openInspection}><td><strong className="linkish">{r[0]}</strong><span className="table-sub">Officer · Arun Kumar</span></td><td><strong>{r[1]}</strong><span className="table-sub">{r[2]}</span></td><td><StatusChip status={r[3]}/></td><td><span className={"priority " + r[4].toLowerCase()}>{r[4]}</span></td><td>{r[5]}</td><td><div className="completion"><div><i style={{width:r[6]}}></i></div><span>{r[6]}</span></div></td><td><ChevronRight size={16}/></td></tr>)}</tbody></table></div></section></> }
+function Inspections({ openInspection, startNewInspection, inspectionsList }: any) { 
+  const [q,setQ]=useState(""); 
+  const filtered = inspectionsList.filter((r: any) => 
+    r.id.toLowerCase().includes(q.toLowerCase()) || 
+    r.machine.toLowerCase().includes(q.toLowerCase()) || 
+    r.site.toLowerCase().includes(q.toLowerCase())
+  ); 
+  return <><PageIntro eyebrow="WORKSPACE / INSPECTIONS" title="My inspections" description="Manage field inspections, completion state, and submission readiness." actions={<button className="btn primary" onClick={() => startNewInspection()}><PlusIcon/> New inspection</button>}/><div className="toolbar"><div className="searchbox"><Search size={16}/><input placeholder="Search by inspection ID, machine, or site" value={q} onChange={e=>setQ(e.target.value)}/></div><button className="btn secondary"><Filter size={15}/> Filters <span className="filter-count">2</span></button><button className="btn secondary"><SlidersHorizontal size={15}/> Sort</button><div className="view-toggle"><button className="active"><Table2 size={16}/></button><button><ListChecks size={16}/></button></div></div><section className="panel table-panel"><div className="table-top"><div><strong>Inspection register</strong><span>{filtered.length} records · Saved locally &amp; synced</span></div><button className="text-btn"><Download size={14}/> Export CSV</button></div><div className="table-wrap"><table><thead><tr><th>Inspection ID</th><th>Machine / site</th><th>Status</th><th>Priority</th><th>Last updated</th><th>Completion</th><th></th></tr></thead><tbody>{filtered.map((r: any)=><tr key={r.id} onClick={openInspection}><td><strong className="linkish">{r.id}</strong><span className="table-sub">Officer · Arun Kumar</span></td><td><strong>{r.machine}</strong><span className="table-sub">{r.site}</span></td><td><StatusChip status={r.status}/></td><td><span className={"priority " + r.priority.toLowerCase()}>{r.priority}</span></td><td>{r.date}</td><td><div className="completion"><div><i style={{width:r.completion}}></i></div><span>{r.completion}</span></div></td><td><ChevronRight size={16}/></td></tr>)}</tbody></table></div></section></> 
+}
 function StatusChip({status}: {status:string}) { return <span className={"status-chip " + status.toLowerCase().replace(" ","-")}><span></span>{status}</span> }
 
-function Workspace({status,setStatus,checklist,saveEdit,offline,go,resolved,setResolved}:any){ const [tab,setTab]=useState("Checklist"); const percent=Math.round(checklist.filter((x:any)=>x.value).length/checklist.length*100); return <><div className="workspace-header"><button className="back-btn" onClick={()=>go("inspections")}>← Inspections</button><div className="workspace-title"><div><div className="eyebrow">INSPECTION / ACTIVE RECORD</div><h2>INS-2026-TN-0001</h2></div><StatusChip status={status}/></div><div className="workspace-meta"><div><span>Machine</span><strong>TRF-102 · Transformer T-102</strong></div><div><span>Site</span><strong>Substation A · Chennai North</strong></div><div><span>Saved locally</span><strong className="saved-label"><Check size={14}/> just now</strong></div><div><span>Connection</span><strong className={offline ? "offline-label" : "online-label"}>{offline ? <CloudOff size={14}/> : <Cloud size={14}/>} {offline ? "OFFLINE" : "ONLINE"}</strong></div></div></div><div className="workspace-tabs">{["Overview","Checklist","Evidence","Remarks","History","Conflicts","Submission"].map(x=><button className={tab===x?"active":""} onClick={()=>setTab(x)} key={x}>{x}{x === "Conflicts" && !resolved && <em>1</em>}</button>)}</div>{tab === "Checklist" && <div className="workspace-grid"><section className="panel checklist-panel"><div className="checklist-heading"><div><div className="eyebrow">CHECKLIST / TRANSFORMER ROUTINE</div><h3>Equipment condition assessment</h3><p>Complete all required readings before submitting this inspection.</p></div><div className="progress-circle"><strong>{percent}%</strong><span>complete</span></div></div><div className="check-items">{checklist.map((item:any,i:number)=><div className="check-item" key={item.id}><div className="check-num">{item.id}</div><div className="check-label"><strong>{item.label}{item.required&&<b>*</b>}</strong><span>{item.helper}</span></div><div className="check-field"><input value={item.value} onChange={e=>saveEdit(i,e.target.value)}/><CheckCircle2 size={16}/></div><MoreHorizontal size={17}/></div>)}<div className="remarks-field"><label>06 · Remarks <span>optional</span></label><textarea placeholder="Add field observations or remarks…" defaultValue="Minor surface dust observed. No action required." onChange={()=>toast("Remark saved locally")}/><span className="saved-inline"><Check size={13}/> Saved locally</span></div></div><div className="checklist-footer"><span><LockKeyhole size={14}/> Required fields validated locally</span><button className="btn primary" onClick={()=>{setStatus("SUBMITTED");toast.success("Inspection submitted",{description:"Inspection moved to supervisor review."})}} disabled={status === "SUBMITTED" || status === "APPROVED"}>{status === "DRAFT" ? <><Send size={15}/> Submit for review</> : <><CheckCircle2 size={15}/> Submitted</>}</button></div></section><aside className="workspace-side"><section className="panel mini-panel"><PanelHeader title="Submission readiness" icon={<FileCheck2 size={16}/>} /><div className="readiness-meter"><div><strong>{resolved ? "100" : "82"}%</strong><span>{resolved ? "Ready to submit" : "1 item needs attention"}</span></div><div className="meter"><i style={{width: resolved ? "100%":"82%"}}></i></div></div><div className="mini-check"><CheckCircle2 size={15}/> Checklist complete <span>5 / 5</span></div><div className={resolved?"mini-check":"mini-check warn"}>{resolved?<CheckCircle2 size={15}/>:<AlertTriangle size={15}/>} Critical conflicts {resolved?"Resolved":"1 unresolved"}</div></section><section className="panel mini-panel"><PanelHeader title="Field traceability" icon={<Link2 size={16}/>} /><div className="trace-row"><div className="avatar small">AK</div><div><strong>Arun Kumar</strong><span>Field Officer · EMP-1024</span></div></div><div className="trace-info"><span>Device</span><strong>DEV-0001 · Android</strong><span>Operation ID</span><strong className="mono">OP-7F31-A9C2</strong></div></section></aside></div>}{tab === "Conflicts" && <Conflicts resolved={resolved} setResolved={(v:any)=>{setResolved(v);toast.success("Conflict resolved",{description:"Resolution appended to the audit trail."})}}/>}{tab === "History" && <HistoryPage/>}{tab === "Evidence" && <Evidence savedCount={2}/>} {tab === "Submission" && <Submission status={status} setStatus={setStatus}/>} {tab === "Overview" && <Overview/>}{tab === "Remarks" && <div className="empty-tab panel"><Sparkles size={20}/><h3>Remarks workspace</h3><p>Field notes, observations, and follow-up actions are protected locally.</p></div>}</> }
-function Overview(){return <div className="overview-grid"><div className="panel overview-hero"><div className="machine-illustration"><div className="transformer"><span></span><span></span><span></span></div></div><div><div className="eyebrow">MACHINE PROFILE</div><h3>TRF-102 · Transformer T-102</h3><p>Operational · 132 / 33 kV · Installed 2018</p><div className="overview-tags"><span>Substation A</span><span>Last inspected 18 Sep 2026</span></div></div></div><div className="panel"><PanelHeader title="Previous readings" icon={<History size={16}/>} /><div className="reading-grid">{[["Oil temperature","72 °C","18 Sep"],["Oil level","84 %","18 Sep"],["Load current","184 A","18 Sep"],["Condition","Normal","18 Sep"]].map(x=><div key={x[0]}><span>{x[0]}</span><strong>{x[1]}</strong><small>{x[2]}</small></div>)}</div></div></div>}
-function Submission({status,setStatus}:any){return <div className="submission-grid"><section className="panel submission-panel"><div className="eyebrow">APPROVAL WORKFLOW</div><h3>Inspection lifecycle</h3><div className="workflow">{["DRAFT","SUBMITTED","UNDER REVIEW","APPROVED"].map((x,i)=><div className={(status===x||["SUBMITTED","UNDER REVIEW","APPROVED"].indexOf(status)>i)?"step done":"step"} key={x}><div>{(["SUBMITTED","UNDER REVIEW","APPROVED"].indexOf(status)>i||status===x)?<Check size={15}/>:i+1}</div><span>{x}</span></div>)}</div><div className="submission-note"><ShieldCheck size={18}/><div><strong>Traceable submission</strong><p>Submitting creates an append-only audit event and queues the package for supervisor review.</p></div></div><button className="btn primary" onClick={()=>{setStatus("SUBMITTED");toast.success("Submitted for review")}}><Send size={15}/> Submit inspection</button></section><section className="panel"><PanelHeader title="Validation summary" icon={<CheckCircle2 size={16}/>} />{["All required checklist values present","Evidence package attached","No critical conflicts","Local changes synchronized"].map((x,i)=><div className="validation-row" key={x}><CheckCircle2 size={16}/><span>{x}</span><small>{i===3?"Pending":"Passed"}</small></div>)}</section></div>}
+function Workspace({status,setStatus,checklist,setChecklist,saveEdit,offline,go,resolved,setResolved,selectedMachineKey,setSelectedMachineKey,manualMachineCode,setManualMachineCode,activeInspectionId,submittedAt,onSubmitClick}:any){
+  const [tab,setTab]=useState("Checklist");
+  const filledCount = checklist.filter((x:any)=>x.value && x.value.trim() !== "").length;
+  const totalCount = checklist.length;
+  const readinessPercent = Math.round((filledCount / totalCount) * 100);
+  const activeMachine = machineTemplates[selectedMachineKey] || { name: `Custom Machine (${manualMachineCode})`, location: "Field Site", type: "General Equipment", checklist: [] };
 
-function Machines({go}:any){return <><PageIntro eyebrow="ASSET REGISTER / MACHINES" title="Machines" description="Offline-cached equipment registry for field identification and inspection context." actions={<button className="btn primary" onClick={()=>go("scanner")}><QrCode size={16}/> Scan machine</button>}/><div className="machine-grid">{[["TRF-102","Transformer T-102","Substation A","Operational","132 / 33 kV","green"],["TRF-117","Transformer T-117","Substation B","Operational","132 / 33 kV","green"],["TRF-203","Transformer T-203","Substation C","Maintenance","220 / 110 kV","amber"],["PMP-301","Cooling Pump P-301","Pump House 4","Operational","45 kW","green"]].map(x=><button className="machine-card panel" key={x[0]} onClick={()=>go("workspace")}><div className="machine-top"><div className="machine-icon"><Cog size={20}/></div><StatusChip status={x[3] === "Operational" ? "APPROVED" : "UNDER REVIEW"}/></div><div className="eyebrow">{x[0]}</div><h3>{x[1]}</h3><p>{x[2]}</p><div className="machine-footer"><span>{x[4]}</span><span>Last check · 18 Sep</span><ChevronRight size={15}/></div></button>)}</div></>}
-function Scanner({go}:any){const [scanned,setScanned]=useState(false); return <><PageIntro eyebrow="FIELD TOOLS / IDENTIFICATION" title="QR scanner" description="Identify a machine from its QR label, even when the device is offline." actions={<span className="ready-chip"><span></span> Camera ready</span>}/><div className="scanner-layout"><section className="panel scanner-panel"><div className="scanner-frame"><div className="scan-corner tl"></div><div className="scan-corner tr"></div><div className="scan-corner bl"></div><div className="scan-corner br"></div><div className="scan-line"></div><QrCode size={78} strokeWidth={1}/></div><p>Point camera at a machine QR label</p><button className="btn primary" onClick={()=>{setScanned(true);toast.success("Machine identified",{description:"TRF-102 found in offline machine cache."})}}><QrCode size={16}/> Simulate scan · TRF-102</button></section>{scanned?<section className="panel machine-result"><div className="result-badge"><CheckCircle2 size={16}/> MACHINE FOUND OFFLINE</div><div className="eyebrow">MACHINE RECORD</div><h3>TRF-102 · Transformer T-102</h3><p>Substation A · Chennai North</p><div className="result-list"><div><span>Status</span><strong className="online-label"><span className="status-dot"></span> Operational</strong></div><div><span>Last inspection</span><strong>18 Sep 2026</strong></div><div><span>Previous readings</span><strong>4 values cached</strong></div><div><span>QR identifier</span><strong className="mono">TRF-102</strong></div></div><div className="result-actions"><button className="btn primary" onClick={()=>go("workspace")}>Start inspection <ArrowRight size={15}/></button><button className="btn secondary" onClick={()=>go("history")}>View history</button></div></section>:<section className="panel scanner-help"><QrCode size={30}/><h3>Fast, offline identification</h3><p>Machine records are cached on this device. Scan a label to retrieve specifications, prior readings, and inspection history without a network connection.</p></section>}</div></>}
+  const handleMachineChange = (key: string) => {
+    setSelectedMachineKey(key);
+    setManualMachineCode(key);
+    if (machineTemplates[key]) {
+      setChecklist(machineTemplates[key].checklist);
+      toast.success(`Loaded checklist for ${key}`, { description: machineTemplates[key].name });
+    }
+  };
+
+  const handleManualCodeChange = (code: string) => {
+    setManualMachineCode(code);
+    const upperCode = code.trim().toUpperCase();
+    if (machineTemplates[upperCode]) {
+      setSelectedMachineKey(upperCode);
+      setChecklist(machineTemplates[upperCode].checklist);
+    }
+  };
+
+  return <><div className="workspace-header">
+    <button className="back-btn" onClick={()=>go("inspections")}>← Inspections</button>
+    <div className="workspace-title">
+      <div><div className="eyebrow">INSPECTION / ACTIVE RECORD</div><h2>{activeInspectionId}</h2></div>
+      <StatusChip status={status}/>
+    </div>
+
+    {/* Machine Selector & Manual Code Bar */}
+    <div className="machine-selector-wrap">
+      <span style={{fontSize:"11px",fontWeight:600,color:"#415662"}}>Select Machine:</span>
+      <select className="machine-select" value={selectedMachineKey} onChange={e => handleMachineChange(e.target.value)}>
+        <optgroup label="1. Transformers (TRF)">
+          <option value="TRF-102">TRF-102 · Transformer T-102 (Substation A)</option>
+          <option value="TRF-117">TRF-117 · Transformer T-117 (Substation B)</option>
+          <option value="TRF-203">TRF-203 · Transformer T-203 (Substation C)</option>
+          <option value="TRF-305">TRF-305 · Distribution Transformer T-305 (Feeder Yard 2)</option>
+        </optgroup>
+        <optgroup label="2. Pumps & Motors (PMP / MTR)">
+          <option value="PMP-301">PMP-301 · Cooling Pump P-301 (Pump House 4)</option>
+          <option value="PMP-302">PMP-302 · Boiler Feed Pump P-302 (Thermal Station 1)</option>
+          <option value="MTR-105">MTR-105 · Induction Motor M-105 (Manali Plant)</option>
+        </optgroup>
+        <optgroup label="3. Generators & Turbines (GEN / TRB)">
+          <option value="GEN-405">GEN-405 · Diesel Generator DG-405 (Power Plant 2)</option>
+          <option value="GEN-502">GEN-502 · Gas Turbine Generator GT-502 (Basin Bridge)</option>
+        </optgroup>
+        <optgroup label="4. Switchgear & Breakers (SWG / CBK)">
+          <option value="CBK-201">CBK-201 · Vacuum Circuit Breaker VCB-201 (Control Room A)</option>
+          <option value="SWG-501">SWG-501 · Gas Insulated Switchgear GIS-501 (220kV GIS Bay)</option>
+        </optgroup>
+        <optgroup label="5. Renewables & Power Systems (SLR / BTY)">
+          <option value="SLR-101">SLR-101 · Solar String Inverter INV-101 (Solar Farm 3)</option>
+          <option value="BTY-202">BTY-202 · Battery Bank BTY-202 (DC Power Room)</option>
+        </optgroup>
+      </select>
+      <span style={{fontSize:"11px",color:"#87949c",margin:"0 4px"}}>or Manual Machine Code:</span>
+      <input className="machine-input" placeholder="e.g. TRF-102" value={manualMachineCode} onChange={e => handleManualCodeChange(e.target.value)} />
+    </div>
+
+    <div className="workspace-meta">
+      <div><span>Machine</span><strong>{manualMachineCode || selectedMachineKey} · {activeMachine.name}</strong></div>
+      <div><span>Site</span><strong>{activeMachine.location}</strong></div>
+      <div><span>Connection</span><strong className={offline ? "offline-label" : "online-label"}>{offline ? <CloudOff size={14}/> : <Cloud size={14}/>} {offline ? "OFFLINE" : "ONLINE"}</strong></div>
+    </div>
+  </div>
+  <div className="workspace-tabs">{["Overview","Checklist","Evidence","Remarks","History","Conflicts","Submission"].map(x=><button className={tab===x?"active":""} onClick={()=>setTab(x)} key={x}>{x}{x === "Conflicts" && !resolved && <em>1</em>}</button>)}</div>
+  {tab === "Checklist" && <div className="workspace-grid"><section className="panel checklist-panel"><div className="checklist-heading"><div><div className="eyebrow">CHECKLIST / {selectedMachineKey} ROUTINE</div><h3>Equipment condition assessment ({activeMachine.name})</h3><p>Complete all required readings before submitting this inspection.</p></div><div className="progress-circle"><strong>{readinessPercent}%</strong><span>complete</span></div></div><div className="check-items">{checklist.map((item:any,i:number)=><div className="check-item" key={item.id + item.label}><div className="check-num">{item.id}</div><div className="check-label"><strong>{item.label}{item.required&&<b>*</b>}</strong><span>{item.helper}</span></div><div className="check-field"><input value={item.value} onChange={e=>saveEdit(i,e.target.value)}/>{(status === "SUBMITTED" || status === "APPROVED") && <CheckCircle2 size={16}/>}</div><MoreHorizontal size={17}/></div>)}<div className="remarks-field"><label>06 · Remarks <span>optional</span></label><textarea placeholder="Add field observations or remarks…" defaultValue="Minor surface dust observed. No action required."/></div></div><div className="checklist-footer"><span><LockKeyhole size={14}/> Required fields validated locally</span><button className="btn primary" onClick={onSubmitClick} disabled={status === "SUBMITTED" || status === "APPROVED"}>{status === "DRAFT" ? <><Send size={15}/> Submit for review</> : <><CheckCircle2 size={15}/> Submitted</>}</button></div></section><aside className="workspace-side"><section className="panel mini-panel"><PanelHeader title="Submission readiness" icon={<FileCheck2 size={16}/>} /><div className="readiness-meter"><div><strong>{readinessPercent}%</strong><span>{readinessPercent === 100 ? "Ready to submit" : `${filledCount} of ${totalCount} items completed`}</span></div><div className="meter"><i style={{width: `${readinessPercent}%`}}></i></div></div><div className="mini-check"><CheckCircle2 size={15}/> Checklist complete <span>{filledCount} / {totalCount}</span></div><div className={resolved?"mini-check":"mini-check warn"}>{resolved?<CheckCircle2 size={15}/>:<AlertTriangle size={15}/>} Critical conflicts {resolved?"Resolved":"1 unresolved"}</div></section><section className="panel mini-panel"><PanelHeader title="Field traceability" icon={<Link2 size={16}/>} /><div className="trace-row"><div className="avatar small">AK</div><div><strong>Arun Kumar</strong><span>Field Officer · EMP-1024</span></div></div><div className="trace-info"><span>Machine</span><strong className="mono">{manualMachineCode}</strong><span>Operation ID</span><strong className="mono">OP-7F31-A9C2</strong><span>Submitted At</span><strong>{submittedAt ? submittedAt : "Pending submission"}</strong></div></section></aside></div>}
+  {tab === "Conflicts" && <Conflicts resolved={resolved} setResolved={(v:any)=>{setResolved(v);toast.success("Conflict resolved",{description:"Resolution appended to the audit trail."})}}/>}
+  {tab === "History" && <HistoryPage/>}
+  {tab === "Evidence" && <Evidence savedCount={2}/>} 
+  {tab === "Submission" && <Submission status={status} onSubmitClick={onSubmitClick}/>} 
+  {tab === "Overview" && <Overview activeMachine={activeMachine} machineCode={manualMachineCode}/>}
+  {tab === "Remarks" && <div className="empty-tab panel"><Sparkles size={20}/><h3>Remarks workspace</h3><p>Field notes, observations, and follow-up actions are protected locally.</p></div>}</>
+}
+
+function Overview({ activeMachine, machineCode }: any){ return <div className="overview-grid"><div className="panel overview-hero"><div className="machine-illustration"><div className="transformer"><span></span><span></span><span></span></div></div><div><div className="eyebrow">MACHINE PROFILE</div><h3>{machineCode || "TRF-102"} · {activeMachine?.name || "Transformer T-102"}</h3><p>{activeMachine?.type || "Operational equipment"} · Installed 2018</p><div className="overview-tags"><span>{activeMachine?.location || "Substation A"}</span><span>Last inspected 18 Sep 2026</span></div></div></div><div className="panel"><PanelHeader title="Previous readings" icon={<History size={16}/>} /><div className="reading-grid">{[["Primary parameter","72 °C","18 Sep"],["Secondary parameter","84 %","18 Sep"],["Load current","184 A","18 Sep"],["Condition","Normal","18 Sep"]].map(x=><div key={x[0]}><span>{x[0]}</span><strong>{x[1]}</strong><small>{x[2]}</small></div>)}</div></div></div>}
+function Submission({status, onSubmitClick}:any){return <div className="submission-grid"><section className="panel submission-panel"><div className="eyebrow">APPROVAL WORKFLOW</div><h3>Inspection lifecycle</h3><div className="workflow">{["DRAFT","SUBMITTED","UNDER REVIEW","APPROVED"].map((x,i)=><div className={(status===x||["SUBMITTED","UNDER REVIEW","APPROVED"].indexOf(status)>i)?"step done":"step"} key={x}><div>{(["SUBMITTED","UNDER REVIEW","APPROVED"].indexOf(status)>i||status===x)?<Check size={15}/>:i+1}</div><span>{x}</span></div>)}</div><div className="submission-note"><ShieldCheck size={18}/><div><strong>Traceable submission</strong><p>Submitting creates an append-only audit event and queues the package for supervisor review.</p></div></div><button className="btn primary" onClick={onSubmitClick} disabled={status === "SUBMITTED" || status === "APPROVED"}><Send size={15}/> {status === "DRAFT" ? "Submit inspection" : "Inspection Submitted"}</button></section><section className="panel"><PanelHeader title="Validation summary" icon={<CheckCircle2 size={16}/>} />{["All required checklist values present","Evidence package attached","No critical conflicts","Local changes synchronized"].map((x,i)=><div className="validation-row" key={x}><CheckCircle2 size={16}/><span>{x}</span><small>{i===3?"Pending":"Passed"}</small></div>)}</section></div>}
+
+function Machines({go, startNewInspection}:any){
+  const machinesList = Object.entries(machineTemplates).map(([code, data]) => [
+    code,
+    data.name,
+    data.location.split("·")[0].trim(),
+    "Operational",
+    data.type,
+    "green"
+  ]);
+
+  return <><PageIntro eyebrow="ASSET REGISTER / MACHINES" title="Machines" description="Offline-cached equipment registry for field identification and inspection context." actions={<button className="btn primary" onClick={()=>go("scanner")}><QrCode size={16}/> Scan machine</button>}/><div className="machine-grid">{machinesList.map(x=><button className="machine-card panel" key={x[0]} onClick={()=>startNewInspection(x[0])}><div className="machine-top"><div className="machine-icon"><Cog size={20}/></div><StatusChip status="APPROVED"/></div><div className="eyebrow">{x[0]}</div><h3>{x[1]}</h3><p>{x[2]}</p><div className="machine-footer"><span>{x[4]}</span><span>Inspect <ChevronRight size={14}/></span></div></button>)}</div></>
+}
+function Scanner({go, startNewInspection}:any){
+  const [scanned,setScanned]=useState(false); 
+  return <><PageIntro eyebrow="FIELD TOOLS / IDENTIFICATION" title="QR scanner" description="Identify a machine from its QR label, even when the device is offline." actions={<span className="ready-chip"><span></span> Camera ready</span>}/><div className="scanner-layout"><section className="panel scanner-panel"><div className="scanner-frame"><div className="scan-corner tl"></div><div className="scan-corner tr"></div><div className="scan-corner bl"></div><div className="scan-corner br"></div><div className="scan-line"></div><QrCode size={78} strokeWidth={1}/></div><p>Point camera at a machine QR label</p><button className="btn primary" onClick={()=>{setScanned(true);toast.success("Machine identified",{description:"TRF-102 found in offline machine cache."})}}><QrCode size={16}/> Simulate scan · TRF-102</button></section>{scanned?<section className="panel machine-result"><div className="result-badge"><CheckCircle2 size={16}/> MACHINE FOUND OFFLINE</div><div className="eyebrow">MACHINE RECORD</div><h3>TRF-102 · Transformer T-102</h3><p>Substation A · Chennai North</p><div className="result-list"><div><span>Status</span><strong className="online-label"><span className="status-dot"></span> Operational</strong></div><div><span>Last inspection</span><strong>18 Sep 2026</strong></div><div><span>Previous readings</span><strong>6 values cached</strong></div><div><span>QR identifier</span><strong className="mono">TRF-102</strong></div></div><div className="result-actions"><button className="btn primary" onClick={()=>startNewInspection("TRF-102")}>Start inspection <ArrowRight size={15}/></button><button className="btn secondary" onClick={()=>go("history")}>View history</button></div></section>:<section className="panel scanner-help"><QrCode size={30}/><h3>Fast, offline identification</h3><p>Machine records are cached on this device. Scan a label to retrieve specifications, prior readings, and inspection history without a network connection.</p></section>}</div></>
+}
 
 function Evidence({savedCount}:any){return <><PageIntro eyebrow="INSPECTION / EVIDENCE" title="Evidence gallery" description="Photos and files are stored locally first, then uploaded through the sync queue." actions={<button className="btn primary" onClick={()=>toast.success("Evidence captured locally",{description:"EVD-2026-00002 added to the upload queue."})}><Upload size={15}/> Capture photo</button>}/><div className="evidence-summary"><div><HardDrive size={17}/><span>Local evidence</span><strong>06 items</strong></div><div><Upload size={17}/><span>Pending upload</span><strong>{savedCount + 1} items</strong></div><div><CheckCircle2 size={17}/><span>Uploaded</span><strong>14 items</strong></div></div><div className="evidence-grid">{[["EVD-2026-00001","Oil temperature gauge","Uploaded","10:43","amber"],["EVD-2026-00002","Equipment condition","Saved locally","10:45","blue"],["EVD-2026-00003","Safety lockout tag","Uploaded","10:46","purple"],["EVD-2026-00004","Transformer nameplate","Uploaded","10:49","green"]].map(x=><div className="evidence-card panel" key={x[0]}><div className={"evidence-preview " + x[4]}><FileText size={30}/><span>PHOTO</span></div><div className="evidence-copy"><strong>{x[1]}</strong><span>{x[0]} · INS-2026-TN-0001</span><small><span className={x[2] === "Uploaded" ? "green-dot" : "amber-dot"}></span>{x[2]} · {x[3]}</small></div><MoreHorizontal size={16}/></div>)}</div></>}
 
