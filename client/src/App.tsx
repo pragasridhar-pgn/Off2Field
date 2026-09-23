@@ -1,6 +1,6 @@
-import { useEffect, useState, FormEvent } from "react";
+import { useEffect, useState, useRef, FormEvent } from "react";
 import {
-  Activity, AlertTriangle, Archive, ArrowRight, BarChart3, Bell, Check, CheckCircle2, ChevronRight, ClipboardCheck, Cloud, CloudOff, Clock3, Cog, Download, Eye, EyeOff, FileBarChart, FileCheck2, FileClock, FileText, Filter, HardDrive, History, Home, Link2, ListChecks, LogOut, LockKeyhole, Menu, MoreHorizontal, QrCode, RefreshCw, Search, Send, Settings2, ShieldCheck, Smartphone, SlidersHorizontal, Sparkles, Table2, Upload, Users, Wifi, X
+  Activity, AlertTriangle, Archive, ArrowRight, BarChart3, Bell, Camera, Check, CheckCircle2, ChevronRight, ClipboardCheck, Cloud, CloudOff, Clock3, Cog, Download, Eye, EyeOff, FileBarChart, FileCheck2, FileClock, FileText, Filter, HardDrive, History, Home, Image as ImageIcon, Link2, ListChecks, LogOut, LockKeyhole, Menu, MoreHorizontal, QrCode, RefreshCw, Search, Send, Settings2, ShieldCheck, Smartphone, SlidersHorizontal, Sparkles, Table2, Trash2, Upload, Users, Wifi, X
 } from "lucide-react";
 import { Toaster, toast } from "sonner";
 import { auth, db } from "./lib/firebase";
@@ -14,13 +14,39 @@ import {
   browserSessionPersistence,
 } from "firebase/auth";
 import { doc, setDoc, getDoc } from "firebase/firestore";
+import {
+  saveInspection,
+  getInspection,
+  getAllInspections,
+  updateInspection
+} from "./db/inspectionStorage";
+import {
+  enqueueSyncItem,
+  getAllQueueItems,
+  getPendingQueueItems,
+  updateQueueItem,
+  deleteQueueItem,
+  clearSyncedQueue,
+  seedInitialQueueIfEmpty,
+} from "./db/syncQueueStorage";
+import {
+  saveEvidenceLocally,
+  getAllEvidence,
+  getEvidenceById,
+  deleteEvidenceLocally,
+  updateEvidenceStatus,
+  seedInitialEvidenceIfEmpty,
+} from "./db/evidenceStorage";
+import type { SyncQueueItem, EvidenceRecord } from "./db/database";
 
-type NavKey = "dashboard" | "inspections" | "workspace" | "machines" | "scanner" | "evidence" | "sync" | "conflicts" | "history" | "reports" | "audit" | "admin";
-type Status = "DRAFT" | "SUBMITTED" | "UNDER REVIEW" | "APPROVED";
+
+type NavKey = "dashboard" | "inspections" | "workspace" | "offline-workspace" | "machines" | "scanner" | "evidence" | "sync" | "conflicts" | "history" | "reports" | "audit" | "admin";
+type Status = "DRAFT" | "SUBMITTED" | "PENDING" | "UNDER REVIEW" | "APPROVED";
 type Role = "inspector" | "admin";
 
 const nav = [
   { key: "dashboard", label: "Dashboard", icon: Home }, { key: "inspections", label: "My Inspections", icon: ClipboardCheck },
+  { key: "offline-workspace", label: "Offline Field Mode", icon: CloudOff },
   { key: "machines", label: "Machines", icon: Cog }, { key: "scanner", label: "QR Scanner", icon: QrCode }, { key: "evidence", label: "Evidence", icon: Archive },
   { key: "sync", label: "Sync Center", icon: RefreshCw }, { key: "conflicts", label: "Conflicts", icon: AlertTriangle }, { key: "history", label: "Inspection History", icon: History },
   { key: "reports", label: "Reports", icon: FileBarChart }, { key: "audit", label: "Audit Trail", icon: FileClock }, { key: "admin", label: "Admin Console", icon: ShieldCheck },
@@ -216,23 +242,59 @@ export default function App() {
   const [role, setRole] = useState<Role | null>(null);
   const [authReady, setAuthReady] = useState(false);
   const [page, setPage] = useState<NavKey>("dashboard");
-  const [offline, setOffline] = useState(false);
+  const [offline, setOffline] = useState(() => !navigator.onLine);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [pendingRecords, setPendingRecords] = useState<any[]>([]);
   const [mobileOpen, setMobileOpen] = useState(false);
-  const [savedCount, setSavedCount] = useState(() => read("off2field-pending", 2));
+  const defaultInspections = [
+    { id: "INS-2026-TN-0001", machine: "TRF-102", site: "Substation A", status: "DRAFT" as Status, priority: "HIGH", date: "23 Sep 2026", completion: "68%" },
+    { id: "INS-2026-TN-0002", machine: "TRF-117", site: "Substation B", status: "SUBMITTED" as Status, priority: "MEDIUM", date: "21 Sep 2026", completion: "100%" },
+    { id: "INS-2026-TN-0003", machine: "PMP-301", site: "Pump House 4", status: "PENDING" as Status, priority: "LOW", date: "20 Sep 2026", completion: "100%" },
+    { id: "INS-2026-TN-0004", machine: "TRF-203", site: "Substation C", status: "APPROVED" as Status, priority: "MEDIUM", date: "18 Sep 2026", completion: "100%" },
+  ];
+
+  const [queueItems, setQueueItems] = useState<SyncQueueItem[]>([]);
+  const [evidenceList, setEvidenceList] = useState<EvidenceRecord[]>([]);
+  const pendingQueue = queueItems.filter(item => item.status === "PENDING" || item.status === "FAILED");
+  const savedCount = pendingQueue.length;
+
+  const refreshEvidence = async () => {
+    try {
+      const items = await seedInitialEvidenceIfEmpty();
+      setEvidenceList(items);
+      return items;
+    } catch (err) {
+      console.error("Failed to load evidence from IndexedDB:", err);
+      return [];
+    }
+  };
+
+  const refreshQueue = async () => {
+    try {
+      const items = await seedInitialQueueIfEmpty();
+      setQueueItems(items);
+      const evs = await getAllEvidence();
+      setEvidenceList(evs);
+      return items;
+    } catch (err) {
+      console.error("Failed to load sync queue from IndexedDB:", err);
+      return [];
+    }
+  };
+
+  useEffect(() => {
+    refreshQueue();
+    refreshEvidence();
+  }, []);
   const [inspectionStatus, setInspectionStatus] = useState<Status>(() => read("off2field-status", "DRAFT"));
-  const [selectedMachineKey, setSelectedMachineKey] = useState("TRF-102");
-  const [manualMachineCode, setManualMachineCode] = useState("TRF-102");
-  const [activeInspectionId, setActiveInspectionId] = useState("INS-2026-TN-0001");
-  const [submittedAt, setSubmittedAt] = useState<string | null>(null);
-  const [checklist, setChecklist] = useState(() => machineTemplates["TRF-102"].checklist);
+  const [selectedMachineKey, setSelectedMachineKey] = useState(() => read("off2field-machine", "TRF-102"));
+  const [manualMachineCode, setManualMachineCode] = useState(() => read("off2field-manual-code", "TRF-102"));
+  const [activeInspectionId, setActiveInspectionId] = useState(() => read("off2field-active-id", "INS-2026-TN-0001"));
+  const [submittedAt, setSubmittedAt] = useState<string | null>(() => read("off2field-submitted-at", null));
+  const [checklist, setChecklist] = useState(() => read("off2field-checklist", machineTemplates["TRF-102"].checklist));
   const [resolved, setResolved] = useState(() => read("off2field-resolved", false));
   const [showSubmittedModal, setShowSubmittedModal] = useState(false);
-  const [inspectionsList, setInspectionsList] = useState([
-    { id: "INS-2026-TN-0001", machine: "TRF-102", site: "Substation A", status: "DRAFT", priority: "HIGH", date: "23 Sep 2026", completion: "68%" },
-    { id: "INS-2026-TN-0002", machine: "TRF-117", site: "Substation B", status: "SUBMITTED", priority: "MEDIUM", date: "21 Sep 2026", completion: "100%" },
-    { id: "INS-2026-TN-0003", machine: "PMP-301", site: "Pump House 4", status: "UNDER REVIEW", priority: "LOW", date: "20 Sep 2026", completion: "100%" },
-    { id: "INS-2026-TN-0004", machine: "TRF-203", site: "Substation C", status: "APPROVED", priority: "MEDIUM", date: "18 Sep 2026", completion: "100%" },
-  ]);
+  const [inspectionsList, setInspectionsList] = useState<any[]>(() => read("off2field-inspections", defaultInspections));
 
   // ── Firebase auth state listener ──────────────────────────────
   useEffect(() => {
@@ -260,23 +322,366 @@ export default function App() {
     return unsub;
   }, []);
 
+  // ── Restore / load inspections from IndexedDB on startup ──────
+  useEffect(() => {
+    (async () => {
+      try {
+        const records = await getAllInspections();
+        if (records && records.length > 0) {
+          setInspectionsList(prev => {
+            const map = new Map(prev.map(x => [x.id, x]));
+            for (const r of records) {
+              const prevItem = map.get(r.id);
+              const status = (r.status as Status) || (prevItem?.status ?? "DRAFT");
+              const machine = r.machine || prevItem?.machine || "TRF-102";
+              const site = r.site || prevItem?.site || (machineTemplates[machine]?.location.split("·")[0].trim() || "Field Site");
+              const completion = (status === "SUBMITTED" || status === "APPROVED" || status === "PENDING") ? "100%" : (prevItem?.completion || "68%");
+              const date = r.submittedAt ? new Date(r.submittedAt).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }) : (prevItem?.date || "Today");
+              map.set(r.id, {
+                id: r.id,
+                machine,
+                site,
+                status,
+                priority: prevItem?.priority || "HIGH",
+                date,
+                completion,
+              });
+            }
+            return Array.from(map.values());
+          });
+
+          // Check if active inspection exists in IndexedDB and restore its state
+          const currentRecord = records.find(r => r.id === activeInspectionId);
+          if (currentRecord) {
+            if (currentRecord.status) setInspectionStatus(currentRecord.status as Status);
+            if (currentRecord.machine) {
+              setSelectedMachineKey(currentRecord.machine);
+              setManualMachineCode(currentRecord.machine);
+            }
+            if (Array.isArray(currentRecord.checklist) && currentRecord.checklist.length > 0) {
+              setChecklist(currentRecord.checklist as any);
+            }
+            if (currentRecord.resolved !== undefined) setResolved(currentRecord.resolved);
+            if (currentRecord.submittedAt) setSubmittedAt(currentRecord.submittedAt);
+          }
+        }
+      } catch (err) {
+        console.error("Failed to load inspections from IndexedDB on startup:", err);
+      }
+    })();
+  }, []);
+
   useEffect(() => { persist("off2field-pending", savedCount); }, [savedCount]);
   useEffect(() => { persist("off2field-status", inspectionStatus); }, [inspectionStatus]);
+  useEffect(() => { persist("off2field-active-id", activeInspectionId); }, [activeInspectionId]);
+  useEffect(() => { persist("off2field-machine", selectedMachineKey); }, [selectedMachineKey]);
+  useEffect(() => { persist("off2field-manual-code", manualMachineCode); }, [manualMachineCode]);
+  useEffect(() => { persist("off2field-submitted-at", submittedAt); }, [submittedAt]);
   useEffect(() => { persist("off2field-checklist", checklist); }, [checklist]);
-  useEffect(() => { persist("off2field-resolved", resolved); }, [resolved]);
+  useEffect(() => { persist("off2field-inspections", inspectionsList); }, [inspectionsList]);
+  useEffect(() => {
+    persist("off2field-resolved", resolved);
+    updateInspection(activeInspectionId, {
+      resolved,
+      updatedAt: new Date().toISOString(),
+    }).catch(err => console.error("Failed to update resolved status in IndexedDB:", err));
+  }, [resolved, activeInspectionId]);
+
+  // ── Native browser offline & online detection ─────────────────
+  useEffect(() => {
+    const handleOnline = () => {
+      setOffline(false);
+      toast.success("Network connection restored", { description: "Syncing pending inspections…" });
+      // auto-trigger sync when connection is restored
+      syncPendingRecords();
+    };
+    const handleOffline = () => {
+      setOffline(true);
+      setPage("offline-workspace");
+      toast.error("Device is Offline", { description: "Switched to Offline Field Workspace." });
+    };
+    window.addEventListener("online", handleOnline);
+    window.addEventListener("offline", handleOffline);
+    return () => {
+      window.removeEventListener("online", handleOnline);
+      window.removeEventListener("offline", handleOffline);
+    };
+  }, []);
+
+  // ── Load pending records whenever savedCount changes ───────────
+  useEffect(() => {
+    getAllInspections().then(records => {
+      setPendingRecords(records.filter(r => r.syncStatus === "PENDING"));
+    }).catch(() => {});
+  }, [savedCount, inspectionStatus]);
+
   useEffect(() => {
     if (!role) return;
     const allowed: NavKey[] = role === "inspector"
-      ? ["dashboard","inspections","workspace","machines","scanner","evidence","sync","conflicts","history"]
+      ? ["dashboard","inspections","workspace","offline-workspace","machines","scanner","evidence","sync","conflicts","history"]
       : ["reports","audit","admin"];
     if (!allowed.includes(page)) setPage(role === "inspector" ? "dashboard" : "reports");
   }, [role, page]);
 
   const go = (key: NavKey) => { setPage(key); setMobileOpen(false); };
-  const toggleOffline = () => { setOffline(v => { const next = !v; toast(next ? "Offline mode enabled — work will be queued locally" : "Connection restored — ready to sync"); return next; }); };
-  const saveEdit = (i: number, value: string) => { setChecklist(items => items.map((item, idx) => idx === i ? { ...item, value } : item)); setSavedCount(c => c + 1); };
-  const sync = () => { setSavedCount(0); toast.success("Sync complete", { description: "All local changes are now synchronized." }); };
-  const openInspection = () => go("workspace");
+  const toggleOffline = () => {
+    setOffline(v => {
+      const next = !v;
+      if (next) {
+        setPage("offline-workspace");
+        toast.info("Offline mode enabled", { description: "Switched to Offline Field Workspace. Work is stored locally." });
+      } else {
+        toast.success("Connection restored", { description: "Ready to sync." });
+      }
+      return next;
+    });
+  };
+  const saveEdit = async (i: number, value: string) => {
+    const updated = checklist.map((item, idx) => (idx === i ? { ...item, value } : item));
+    setChecklist(updated);
+    const itemLabel = checklist[i]?.label || `Item ${i + 1}`;
+    updateInspection(activeInspectionId, {
+      checklist: updated,
+      syncStatus: "PENDING",
+      updatedAt: new Date().toISOString(),
+    }).catch(err => console.error("Failed to update checklist in IndexedDB:", err));
+
+    await enqueueSyncItem({
+      entityId: activeInspectionId,
+      entityName: activeInspectionId === "INS-2026-TN-0001" ? "Inspection A" :
+                 activeInspectionId === "INS-2026-TN-0002" ? "Inspection B" :
+                 activeInspectionId === "INS-2026-TN-0003" ? "Inspection C" : activeInspectionId,
+      operationType: "UPDATE_CHECKLIST",
+      title: `${itemLabel} → ${value}`,
+      machine: manualMachineCode || selectedMachineKey,
+      site: machineTemplates[selectedMachineKey]?.location.split("·")[0].trim() || "Field Site",
+      status: "PENDING",
+      payload: {
+        inspectionId: activeInspectionId,
+        field: itemLabel,
+        value,
+        updatedAt: new Date().toISOString(),
+      },
+    });
+    await refreshQueue();
+  };
+
+  // ── Real sync: sequentially process real PENDING items from IndexedDB ──
+  const syncPendingRecords = async () => {
+    if (isSyncing) return;
+    setIsSyncing(true);
+    try {
+      const items = await getPendingQueueItems();
+      if (items.length === 0) {
+        toast("Nothing to sync", { description: "All local operations are already synchronized." });
+        setIsSyncing(false);
+        return;
+      }
+      let synced = 0;
+      let failed = 0;
+
+      for (const item of items) {
+        // Mark as SYNCING in IndexedDB & state
+        await updateQueueItem(item.id, { status: "SYNCING" });
+        setQueueItems(prev => prev.map(q => q.id === item.id ? { ...q, status: "SYNCING" } : q));
+
+        // Observable sequential delay for realistic queue progress
+        await new Promise(r => setTimeout(r, 400));
+
+        try {
+          if (offline) {
+            throw new Error("Device is offline. Queued locally in IndexedDB.");
+          }
+          // Real cloud sync: write to Firestore
+          await setDoc(
+            doc(db as any, "inspections", item.entityId),
+            {
+              id: item.entityId,
+              machine: item.machine,
+              site: item.site,
+              ...(item.payload || {}),
+              syncStatus: "SYNCED",
+              syncedAt: new Date().toISOString(),
+            },
+            { merge: true }
+          );
+          // Mark SYNCED in IndexedDB
+          await updateQueueItem(item.id, {
+            status: "SYNCED",
+            syncedAt: new Date().toISOString(),
+            lastError: undefined,
+          });
+          if (item.operationType === "UPLOAD_EVIDENCE") {
+            await updateEvidenceStatus(item.entityId, "SYNCED", new Date().toISOString());
+          } else {
+            await updateInspection(item.entityId, {
+              syncStatus: "SYNCED",
+              updatedAt: new Date().toISOString(),
+            });
+          }
+          synced++;
+        } catch (err: any) {
+          await updateQueueItem(item.id, {
+            status: "FAILED",
+            lastError: err?.message || "Sync failed",
+            retryCount: (item.retryCount || 0) + 1,
+          });
+          failed++;
+        }
+      }
+
+      // Refresh real queue state from IndexedDB
+      await refreshQueue();
+      const refreshedEvs = await getAllEvidence();
+      setEvidenceList(refreshedEvs);
+
+      // Refresh inspections list statuses after sync
+      const refreshed = await getAllInspections();
+      setPendingRecords(refreshed.filter(r => r.syncStatus === "PENDING"));
+      setInspectionsList(prev => {
+        const map = new Map(prev.map(x => [x.id, x]));
+        for (const r of refreshed) {
+          const prevItem = map.get(r.id);
+          if (prevItem && r.syncStatus === "SYNCED") {
+            map.set(r.id, { ...prevItem, status: r.status });
+          }
+        }
+        return Array.from(map.values());
+      });
+
+      if (failed === 0) {
+        toast.success(`Sync complete — ${synced} operation${synced !== 1 ? "s" : ""} uploaded`, {
+          description: "All local changes are now synchronized with the cloud."
+        });
+      } else {
+        toast.warning(`Partial sync — ${synced} uploaded, ${failed} failed`, {
+          description: "Failed records remain safely stored in IndexedDB for retry."
+        });
+      }
+    } catch (err) {
+      console.error("Sync error:", err);
+      toast.error("Sync failed", { description: "Could not reach the server. Will retry when online." });
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  const syncSingleItem = async (itemId: string) => {
+    const item = queueItems.find(q => q.id === itemId);
+    if (!item) return;
+    await updateQueueItem(itemId, { status: "SYNCING" });
+    setQueueItems(prev => prev.map(q => q.id === itemId ? { ...q, status: "SYNCING" } : q));
+    await new Promise(r => setTimeout(r, 350));
+    try {
+      if (offline) throw new Error("Device is offline");
+      await setDoc(
+        doc(db as any, "inspections", item.entityId),
+        {
+          id: item.entityId,
+          machine: item.machine,
+          site: item.site,
+          ...(item.payload || {}),
+          syncStatus: "SYNCED",
+          syncedAt: new Date().toISOString(),
+        },
+        { merge: true }
+      );
+      await updateQueueItem(itemId, {
+        status: "SYNCED",
+        syncedAt: new Date().toISOString(),
+        lastError: undefined,
+      });
+      if (item.operationType === "UPLOAD_EVIDENCE") {
+        await updateEvidenceStatus(item.entityId, "SYNCED", new Date().toISOString());
+      } else {
+        await updateInspection(item.entityId, {
+          syncStatus: "SYNCED",
+          updatedAt: new Date().toISOString(),
+        });
+      }
+      toast.success(`${item.entityName} synced to cloud!`);
+    } catch (err: any) {
+      await updateQueueItem(itemId, {
+        status: "FAILED",
+        lastError: err?.message || "Sync failed",
+        retryCount: (item.retryCount || 0) + 1,
+      });
+      toast.error(`Sync failed for ${item.entityName}`, { description: err?.message });
+    }
+    await refreshQueue();
+    const refreshedEvs = await getAllEvidence();
+    setEvidenceList(refreshedEvs);
+  };
+
+  const enqueueCustomOperation = async () => {
+    const count = queueItems.length + 1;
+    const letter = String.fromCharCode(65 + ((count - 1) % 26));
+    const entityName = `Inspection ${letter}`;
+    const newId = `INS-2026-TN-00${count < 10 ? '0' + count : count}`;
+    await enqueueSyncItem({
+      entityId: newId,
+      entityName,
+      operationType: "SUBMIT_INSPECTION",
+      title: `${entityName} · Transformer T-${100 + count} (Field Reading)`,
+      machine: `TRF-${100 + count}`,
+      site: `Substation ${letter}`,
+      status: "PENDING",
+      payload: {
+        id: newId,
+        machine: `TRF-${100 + count}`,
+        status: "SUBMITTED",
+        itemsChecked: 7,
+        completion: "100%",
+        offlineHash: `SHA-${Math.random().toString(36).slice(2, 6).toUpperCase()}`,
+      },
+    });
+    await refreshQueue();
+    toast.success(`Enqueued ${entityName} → PENDING`, {
+      description: "Real operation added to Dexie IndexedDB sync queue."
+    });
+  };
+
+  const clearCompleted = async () => {
+    await clearSyncedQueue();
+    await refreshQueue();
+    toast("Completed queue operations cleared from IndexedDB");
+  };
+
+  const resetDefaultQueue = async () => {
+    for (const item of queueItems) {
+      await deleteQueueItem(item.id);
+    }
+    await seedInitialQueueIfEmpty();
+    await refreshQueue();
+    toast.success("Sync Queue reset to default operations (Inspection A, B, C)");
+  };
+  const sync = () => syncPendingRecords();
+  const openInspection = async (id?: string) => {
+    if (id) {
+      setActiveInspectionId(id);
+      const match = inspectionsList.find(x => x.id === id);
+      if (match) {
+        setInspectionStatus(match.status as Status);
+        if (machineTemplates[match.machine]) {
+          setSelectedMachineKey(match.machine);
+          setManualMachineCode(match.machine);
+        }
+      }
+      try {
+        const record = await getInspection(id);
+        if (record) {
+          if (record.status) setInspectionStatus(record.status as Status);
+          if (Array.isArray(record.checklist) && record.checklist.length > 0) {
+            setChecklist(record.checklist as any);
+          }
+          if (record.resolved !== undefined) setResolved(record.resolved);
+        }
+      } catch (err) {
+        console.error("Failed to load inspection from IndexedDB:", err);
+      }
+    }
+    go("workspace");
+  };
 
   const startNewInspection = (machineKey?: string) => {
     const nextNum = inspectionsList.length + 1;
@@ -287,17 +692,105 @@ export default function App() {
     setManualMachineCode(targetKey);
     setInspectionStatus("DRAFT");
     setSubmittedAt(null);
+    const initialChecklist = machineTemplates[targetKey]?.checklist || [];
     if (machineTemplates[targetKey]) {
-      setChecklist(machineTemplates[targetKey].checklist);
+      setChecklist(initialChecklist);
     }
     setInspectionsList(prev => [
       { id: newId, machine: targetKey, site: machineTemplates[targetKey]?.location.split("·")[0].trim() || "Field Site", status: "DRAFT", priority: "HIGH", date: "Today", completion: "0%" },
       ...prev
     ]);
+
+    const now = new Date().toISOString();
+    saveInspection({
+      id: newId,
+      status: "DRAFT",
+      checklist: initialChecklist,
+      resolved: false,
+      syncStatus: "PENDING",
+      createdAt: now,
+      updatedAt: now,
+    }).catch(err => console.error("Failed to save new inspection in IndexedDB:", err));
+
+    enqueueSyncItem({
+      entityId: newId,
+      entityName: `Inspection ${String.fromCharCode(65 + ((inspectionsList.length) % 26))}`,
+      operationType: "CREATE_INSPECTION",
+      title: `Create ${newId} (${targetKey})`,
+      machine: targetKey,
+      site: machineTemplates[targetKey]?.location.split("·")[0].trim() || "Field Site",
+      status: "PENDING",
+      payload: {
+        id: newId,
+        machine: targetKey,
+        status: "DRAFT",
+        checklist: initialChecklist,
+        createdAt: now,
+      },
+    }).then(() => refreshQueue()).catch(err => console.error("Failed to enqueue in IndexedDB:", err));
+
     go("workspace");
   };
 
-  const handleInspectionSubmit = () => {
+  const handleCaptureEvidence = async (fileOrDataUrl?: { file?: File; dataUrl?: string; name?: string; title?: string }) => {
+    let dataUrl = fileOrDataUrl?.dataUrl;
+    let name = fileOrDataUrl?.name || "captured_photo.jpg";
+    let title = fileOrDataUrl?.title || "Field Equipment Photo";
+    let size = 32000;
+    let mimeType = "image/jpeg";
+
+    if (fileOrDataUrl?.file) {
+      name = fileOrDataUrl.file.name;
+      title = name.replace(/\.[^/.]+$/, "");
+      size = fileOrDataUrl.file.size;
+      mimeType = fileOrDataUrl.file.type || "image/jpeg";
+      dataUrl = await new Promise<string>((resolve) => {
+        const reader = new FileReader();
+        reader.onload = (e) => resolve(e.target?.result as string);
+        reader.readAsDataURL(fileOrDataUrl.file!);
+      });
+    } else if (!dataUrl) {
+      // Create simulated snapshot dataUrl if none provided
+      const timeStr = new Date().toLocaleTimeString();
+      const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="400" height="300" viewBox="0 0 400 300">
+        <rect width="400" height="300" fill="#1e293b"/>
+        <circle cx="200" cy="130" r="46" fill="rgba(56,189,248,0.25)"/>
+        <text x="200" y="138" fill="#38bdf8" font-size="28" font-family="system-ui" font-weight="bold" text-anchor="middle">📷</text>
+        <text x="200" y="210" fill="#ffffff" font-size="16" font-family="system-ui" font-weight="600" text-anchor="middle">Field Photo Snapshot</text>
+        <text x="200" y="235" fill="#94a3b8" font-size="12" font-family="monospace" text-anchor="middle">${timeStr} · IndexedDB</text>
+      </svg>`;
+      dataUrl = `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
+      name = `photo_${Date.now().toString().slice(-4)}.jpg`;
+      title = `Field Inspection Photo · ${selectedMachineKey || "TRF-102"}`;
+    }
+
+    try {
+      const record = await saveEvidenceLocally({
+        inspectionId: activeInspectionId || "INS-2026-TN-0001",
+        name,
+        title,
+        mimeType,
+        size,
+        dataUrl,
+        syncStatus: "PENDING",
+      });
+
+      await refreshQueue();
+      const refreshedEvs = await getAllEvidence();
+      setEvidenceList(refreshedEvs);
+
+      toast.success("Evidence saved locally to IndexedDB", {
+        description: `${record.id} (${title}) enqueued to PENDING sync queue.`
+      });
+    } catch (err: any) {
+      console.error("Failed to save evidence:", err);
+      toast.error("Failed to store evidence locally", { description: err?.message });
+    }
+  };
+
+  const transitionLifecycle = async (targetStatus: Status) => {
+    setInspectionStatus(targetStatus);
+    const nowIso = new Date().toISOString();
     const timeStr = new Date().toLocaleString("en-IN", {
       day: "2-digit",
       month: "short",
@@ -306,10 +799,55 @@ export default function App() {
       minute: "2-digit",
       hour12: true,
     });
-    setInspectionStatus("SUBMITTED");
-    setSubmittedAt(timeStr);
-    setShowSubmittedModal(true);
-    toast.success("Inspection submitted for review");
+
+    if (targetStatus === "SUBMITTED") {
+      setSubmittedAt(timeStr);
+      setShowSubmittedModal(true);
+      toast.success("Inspection submitted for review", {
+        description: "Audit trail signed & saved in IndexedDB. Queued for sync (PENDING)."
+      });
+    } else if (targetStatus === "PENDING") {
+      toast.info("Inspection queued as PENDING", {
+        description: "Record is queued locally for cloud synchronization and supervisor sign-off."
+      });
+    } else if (targetStatus === "DRAFT") {
+      toast("Reopened inspection as DRAFT", {
+        description: "Checklist and field values are unlocked for modifications on-site."
+      });
+    }
+
+    try {
+      await updateInspection(activeInspectionId, {
+        status: targetStatus,
+        syncStatus: "PENDING",
+        submittedAt: (targetStatus === "SUBMITTED" || targetStatus === "PENDING") ? nowIso : undefined,
+        updatedAt: nowIso,
+      });
+
+      if (targetStatus === "SUBMITTED" || targetStatus === "PENDING") {
+        await enqueueSyncItem({
+          entityId: activeInspectionId,
+          entityName: activeInspectionId === "INS-2026-TN-0001" ? "Inspection A" :
+                     activeInspectionId === "INS-2026-TN-0002" ? "Inspection B" :
+                     activeInspectionId === "INS-2026-TN-0003" ? "Inspection C" : activeInspectionId,
+          operationType: "SUBMIT_INSPECTION",
+          title: `${activeInspectionId} · ${targetStatus} (${manualMachineCode || selectedMachineKey})`,
+          machine: manualMachineCode || selectedMachineKey,
+          site: machineTemplates[selectedMachineKey]?.location.split("·")[0].trim() || "Field Site",
+          status: "PENDING",
+          payload: {
+            id: activeInspectionId,
+            machine: manualMachineCode || selectedMachineKey,
+            status: targetStatus,
+            checklist,
+            submittedAt: nowIso,
+          },
+        });
+        await refreshQueue();
+      }
+    } catch (err) {
+      console.error("Failed to update status in IndexedDB:", err);
+    }
 
     setInspectionsList(prev => {
       const code = manualMachineCode || selectedMachineKey;
@@ -319,18 +857,22 @@ export default function App() {
         id: activeInspectionId,
         machine: code,
         site: site,
-        status: "SUBMITTED",
+        status: targetStatus,
         priority: "HIGH",
-        date: "Today",
-        completion: "100%",
+        date: (targetStatus === "SUBMITTED" || targetStatus === "PENDING") ? "Today" : "23 Sep 2026",
+        completion: targetStatus === "DRAFT" ? "68%" : "100%",
       };
       if (index >= 0) {
         const copy = [...prev];
-        copy[index] = record;
+        copy[index] = { ...copy[index], ...record };
         return copy;
       }
       return [record, ...prev];
     });
+  };
+
+  const handleInspectionSubmit = () => {
+    transitionLifecycle("SUBMITTED");
   };
   const logout = async () => { try { await signOut(auth); } catch { /**/ } setRole(null); setPage("dashboard"); };
 
@@ -342,9 +884,9 @@ export default function App() {
     setPage(r === "admin" ? "reports" : "dashboard");
   }} />;
 
-  const inspectorNav = nav.slice(0, 8);
-  const adminNav = nav.slice(8);
-  const mobileNavItems = role === "inspector" ? nav.slice(0, 5) : nav.slice(8);
+  const inspectorNav = nav.slice(0, 9);
+  const adminNav = nav.slice(9);
+  const mobileNavItems = role === "inspector" ? nav.slice(0, 6) : nav.slice(9);
 
   return <div className="app-shell">
     <Toaster position="bottom-right" richColors />
@@ -353,10 +895,32 @@ export default function App() {
       <div className="brand-wrap"><Brand/><button className="icon-btn close-mobile" onClick={() => setMobileOpen(false)}><X size={18}/></button></div>
       {role === "inspector" && <><div className="nav-label">WORKSPACE</div><nav>{inspectorNav.map(item => <NavItem key={item.key} item={item} active={page === item.key || (page === "workspace" && item.key === "inspections")} onClick={() => go(item.key as NavKey)} badge={item.key === "sync" ? savedCount : item.key === "conflicts" && !resolved ? 1 : undefined}/>)}</nav></>}
       {role === "admin" && <><div className="nav-label">INSIGHT & CONTROL</div><nav>{adminNav.map(item => <NavItem key={item.key} item={item} active={page === item.key} onClick={() => go(item.key as NavKey)}/>)}</nav></>}
-      <div className="sidebar-bottom"><div className="profile"><div className="avatar">{role === "admin" ? "AD" : "AK"}</div><div><strong>{role === "admin" ? "Admin User" : "Arun Kumar"}</strong><span>{role === "admin" ? "Administrator" : "Field Officer"}</span></div><button className="icon-btn logout-btn" title="Sign out" onClick={logout}><LogOut size={16}/></button></div></div>
+      {offline && (
+        <div style={{padding:"6px 12px 0 12px"}}>
+          <button className={"nav-item " + (page === "offline-workspace" ? "active" : "")} style={{background: page === "offline-workspace" ? undefined : "#1e354a", color: "#ffffff", border: "1px solid #f59e0b"}} onClick={() => go("offline-workspace")}>
+            <CloudOff size={16} color="#f59e0b"/>
+            <span><strong>Offline Workspace</strong></span>
+            <em style={{background:"#f59e0b",color:"#0f172a",fontWeight:700}}>LIVE</em>
+          </button>
+        </div>
+      )}
+      <div className="sidebar-bottom"><div className="profile"><div className="avatar">{role === "admin" ? "AD" : "PR"}</div><div><strong>{role === "admin" ? "Admin User" : "Pragatheesh"}</strong><span>{role === "admin" ? "Administrator" : "Field Officer"}</span></div><button className="icon-btn logout-btn" title="Sign out" onClick={logout}><LogOut size={16}/></button></div></div>
     </aside>
-    <main className="main"><Topbar page={page} offline={offline} toggleOffline={toggleOffline} savedCount={savedCount} sync={sync}/>
-      <div className="content">{page === "dashboard" && <Dashboard go={go} offline={offline} savedCount={savedCount} openInspection={openInspection}/>} {page === "inspections" && <Inspections openInspection={openInspection} startNewInspection={startNewInspection} inspectionsList={inspectionsList}/>} {page === "workspace" && <Workspace status={inspectionStatus} setStatus={setInspectionStatus} checklist={checklist} setChecklist={setChecklist} saveEdit={saveEdit} offline={offline} go={go} resolved={resolved} setResolved={setResolved} selectedMachineKey={selectedMachineKey} setSelectedMachineKey={setSelectedMachineKey} manualMachineCode={manualMachineCode} setManualMachineCode={setManualMachineCode} activeInspectionId={activeInspectionId} submittedAt={submittedAt} onSubmitClick={handleInspectionSubmit}/>} {page === "machines" && <Machines go={go} startNewInspection={startNewInspection}/>} {page === "scanner" && <Scanner go={go} startNewInspection={startNewInspection}/>} {page === "evidence" && <Evidence savedCount={savedCount}/>} {page === "sync" && <SyncCenter savedCount={savedCount} sync={sync}/>} {page === "conflicts" && <Conflicts resolved={resolved} setResolved={setResolved}/>} {page === "history" && <HistoryPage/>} {page === "reports" && <Reports/>} {page === "audit" && <Audit/>} {page === "admin" && <Admin/>}</div>
+    <main className="main"><Topbar page={page} offline={offline} isSyncing={isSyncing} toggleOffline={toggleOffline} savedCount={savedCount} sync={sync}/>
+      {offline && page !== "offline-workspace" && (
+        <div style={{padding:"0 24px 0 24px",marginTop:14}}>
+          <div className="offline-banner-bar">
+            <div className="banner-left">
+              <span className="banner-tag">OFFLINE MODE</span>
+              <span>Network connection lost. All checklist data, notes, and photos are saved directly to this device.</span>
+            </div>
+            <button className="btn primary" style={{padding:"6px 14px",fontSize:"12px"}} onClick={() => go("offline-workspace")}>
+              <CloudOff size={14}/> Open Offline Workspace
+            </button>
+          </div>
+        </div>
+      )}
+      <div className="content">{page === "dashboard" && <Dashboard go={go} offline={offline} savedCount={savedCount} openInspection={openInspection}/>} {page === "inspections" && <Inspections openInspection={openInspection} startNewInspection={startNewInspection} inspectionsList={inspectionsList}/>} {page === "workspace" && <Workspace status={inspectionStatus} setStatus={setInspectionStatus} transitionLifecycle={transitionLifecycle} checklist={checklist} setChecklist={setChecklist} saveEdit={saveEdit} offline={offline} go={go} resolved={resolved} setResolved={setResolved} selectedMachineKey={selectedMachineKey} setSelectedMachineKey={setSelectedMachineKey} manualMachineCode={manualMachineCode} setManualMachineCode={setManualMachineCode} activeInspectionId={activeInspectionId} submittedAt={submittedAt} onSubmitClick={handleInspectionSubmit} savedCount={savedCount} onCaptureEvidence={handleCaptureEvidence} evidenceList={evidenceList} onDeleteEvidence={async (id: string) => { await deleteEvidenceLocally(id); const evs = await getAllEvidence(); setEvidenceList(evs); await refreshQueue(); toast("Evidence deleted from IndexedDB"); }} onSyncEvidence={async (item: any) => { if (item.queueItemId) { await syncSingleItem(item.queueItemId); } else { toast.info("Item is already synced or has no pending queue entry."); } }}/>} {page === "offline-workspace" && <OfflineWorkspace go={go} refreshQueue={refreshQueue} setInspectionsList={setInspectionsList} onSubmitted={(newId: string) => { setActiveInspectionId(newId); setInspectionStatus("SUBMITTED"); setShowSubmittedModal(true); }} />} {page === "machines" && <Machines go={go} startNewInspection={startNewInspection}/>} {page === "scanner" && <Scanner go={go} startNewInspection={startNewInspection}/>} {page === "evidence" && <Evidence evidenceList={evidenceList} savedCount={savedCount} onCaptureEvidence={handleCaptureEvidence} onDeleteEvidence={async (id: string) => { await deleteEvidenceLocally(id); const evs = await getAllEvidence(); setEvidenceList(evs); await refreshQueue(); toast("Evidence deleted from IndexedDB"); }} onSyncEvidence={async (item: any) => { if (item.queueItemId) { await syncSingleItem(item.queueItemId); } else { toast.info("Item is already synced or has no pending queue entry."); } }} offline={offline}/>} {page === "sync" && <SyncCenter queueItems={queueItems} pendingCount={savedCount} sync={sync} syncSingleItem={syncSingleItem} enqueueTestOperation={enqueueCustomOperation} clearCompleted={clearCompleted} resetDefaultQueue={resetDefaultQueue} isSyncing={isSyncing} offline={offline}/>} {page === "conflicts" && <Conflicts resolved={resolved} setResolved={setResolved}/>} {page === "history" && <HistoryPage/>} {page === "reports" && <Reports/>} {page === "audit" && <Audit/>} {page === "admin" && <Admin/>}</div>
     </main>
     <div className="mobile-nav">{mobileNavItems.map(item => <button className={page === item.key ? "active" : ""} key={item.key} onClick={() => go(item.key as NavKey)}><item.icon size={18}/><span>{item.label.split(" ")[0]}</span></button>)}</div>
 
@@ -367,11 +931,11 @@ export default function App() {
           <div className="modal-header">
             <div className="modal-icon-badge"><CheckCircle2 size={30}/></div>
             <h3>Inspection Submitted Successfully!</h3>
-            <p>Your inspection record has been validated, saved locally, and queued for supervisor review.</p>
+            <p>Your inspection record has been signed off, saved locally, and queued for supervisor review.</p>
           </div>
           <div className="modal-body">
             <div className="modal-details-grid">
-              <div className="modal-detail-item"><span>Inspection ID</span><strong>INS-2026-TN-0001</strong></div>
+              <div className="modal-detail-item"><span>Inspection ID</span><strong>{activeInspectionId}</strong></div>
               <div className="modal-detail-item"><span>Machine Code</span><strong className="mono">{manualMachineCode || selectedMachineKey}</strong></div>
               <div className="modal-detail-item"><span>Machine Name</span><strong>{machineTemplates[selectedMachineKey]?.name || "Equipment Record"}</strong></div>
               <div className="modal-detail-item"><span>Location</span><strong>{machineTemplates[selectedMachineKey]?.location || "Field Substation"}</strong></div>
@@ -381,14 +945,17 @@ export default function App() {
             </div>
             <div className="modal-note">
               <ShieldCheck size={16}/>
-              <span>Tamper-proof audit record created. Saved offline &amp; ready for cloud sync.</span>
+              <span>Tamper-proof audit record created. Saved in Dexie IndexedDB &amp; ready for cloud sync.</span>
             </div>
           </div>
           <div className="modal-actions">
             <button className="btn secondary" onClick={() => { setShowSubmittedModal(false); go("inspections"); }}>
-              <ClipboardCheck size={15}/> View My Inspections
+              <ClipboardCheck size={15}/> View Inspections
             </button>
-            <button className="btn primary" onClick={() => setShowSubmittedModal(false)}>
+            <button className="btn primary" style={{background:"#d97706"}} onClick={() => { transitionLifecycle("PENDING"); setShowSubmittedModal(false); }}>
+              <Clock3 size={15}/> Queue for Sync (→ PENDING)
+            </button>
+            <button className="btn secondary" onClick={() => setShowSubmittedModal(false)}>
               <Check size={15}/> Done &amp; Close
             </button>
           </div>
@@ -459,6 +1026,17 @@ function LoginPage({ onLogin }: { onLogin: (role: Role, remember: boolean) => vo
           <label className="remember-check"><input type="checkbox" checked={rememberDevice} onChange={e => setRememberDevice(e.target.checked)}/><span>Remember this device</span></label>
           {err && <div className="login-error">{err}</div>}
           <button type="submit" className="login-submit inspector" disabled={loading || !user || !pass}>{loading && <span className="login-spinner"/>}{loading ? "Signing in…" : "Sign in"}</button>
+          <div style={{marginTop:12,borderTop:"1px solid #e2e8f0",paddingTop:12,textAlign:"center"}}>
+            <button
+              type="button"
+              className="btn secondary"
+              style={{width:"100%",justifyContent:"center",fontSize:"12px",padding:"8px"}}
+              onClick={() => onLogin("inspector", false)}
+            >
+              <CloudOff size={14} color="#f59e0b"/> Work in Offline Field Mode (No login required)
+            </button>
+            <p style={{fontSize:10,color:"var(--muted)",marginTop:5}}>Inspect equipment, edit checklists, and take photos offline</p>
+          </div>
         </form>
       </div>
     </div>
@@ -469,10 +1047,10 @@ function LoginPage({ onLogin }: { onLogin: (role: Role, remember: boolean) => vo
 function Brand({ compact = false }: { compact?: boolean }) { return <div className="brand"><div className="brand-symbol"><span></span><span></span><span></span></div>{!compact && <div><strong>OFF<span>2</span>FIELD</strong><small>FIELD INSPECTION OS</small></div>}</div> }
 function NavItem({ item, active, onClick, badge }: any) { return <button className={"nav-item " + (active ? "active" : "")} onClick={onClick}><item.icon size={17}/><span>{item.label}</span>{badge !== undefined && <em>{badge}</em>}</button> }
 function Connection({ offline, onClick }: { offline: boolean; onClick: () => void }) { return <button onClick={onClick} className={"connection " + (offline ? "is-offline" : "")}><span className="status-dot"></span>{offline ? "OFFLINE" : "ONLINE"}<ChevronRight size={13}/></button> }
-function Topbar({ page, offline, toggleOffline, savedCount, sync }: any) { const title = page === "workspace" ? "Inspection workspace" : page === "dashboard" ? "Operations overview" : nav.find(n => n.key === page)?.label; return <div className="topbar"><div><h1>{title}</h1></div><div className="top-actions"><div className="local-save"><span className="pulse"></span><span><strong>Local storage protected</strong><small>Last saved just now</small></span></div><button className="top-icon"><Bell size={18}/><i></i></button><Connection offline={offline} onClick={toggleOffline}/><button className="sync-btn" onClick={sync}><RefreshCw size={15}/> Sync {savedCount > 0 && <b>{savedCount}</b>}</button></div></div> }
+function Topbar({ page, offline, isSyncing, toggleOffline, savedCount, sync }: any) { const title = page === "workspace" ? "Inspection workspace" : page === "dashboard" ? "Operations overview" : nav.find(n => n.key === page)?.label; return <div className="topbar"><div><h1>{title}</h1></div><div className="top-actions"><div className="local-save"><span className="pulse"></span><span><strong>Local storage protected</strong><small>Last saved just now</small></span></div><button className="top-icon"><Bell size={18}/><i></i></button><Connection offline={offline} onClick={toggleOffline}/><button className="sync-btn" onClick={sync} disabled={isSyncing} style={isSyncing ? {opacity:0.7,cursor:"not-allowed"} : {}}><RefreshCw size={15} style={isSyncing ? {animation:"spin 1s linear infinite"} : {}}/> {isSyncing ? "Syncing…" : <>Sync {savedCount > 0 && <b>{savedCount}</b>}</>}</button></div></div> }
 
 function PageIntro({ eyebrow, title, description, actions }: any) { return <div className="page-intro"><div><div className="eyebrow">{eyebrow}</div><h2>{title}</h2><p>{description}</p></div><div className="intro-actions">{actions}</div></div> }
-function Dashboard({ go, offline, savedCount, openInspection }: any) { return <><div className="dash-actions"><button className="btn secondary" onClick={() => go("scanner")}><QrCode size={16}/> Scan machine</button><button className="btn primary" onClick={openInspection}><PlusIcon/> Start inspection</button></div><div className="stat-grid">{[["Assigned inspections","12","+2 this week","blue",ClipboardCheck,"inspections"],["In progress","03","2 due today","amber",Activity,"inspections"],["Submitted","08","+4 this week","green",Send,"inspections"],["Pending review","04","Supervisor queue","violet",Clock3,"inspections"],["Conflicts","01","Needs resolution","red",AlertTriangle,"conflicts"],["Approved","27","92% acceptance","teal",CheckCircle2,"history"]].map(([label,value,sub,color,Icon,dest]: any[]) => <button className="stat-card stat-card-btn" key={label as string} onClick={() => go(dest)}><div className={"stat-icon " + color}><Icon size={17}/></div><div className="stat-copy"><span>{label}</span><strong>{value}</strong><small className={color === "red" ? "danger-text" : ""}>{sub}</small></div><ChevronRight size={14} className="muted-icon stat-arrow"/></button>)}</div><div className="dashboard-grid"><section className="panel readiness"><PanelHeader title="Offline readiness" icon={<Wifi size={17}/>} action={<span className="ready-chip"><span></span> Device ready</span>}/><div className="readiness-body"><div className="readiness-score"><div className="score-ring"><strong>100</strong><span>%</span></div><div><strong>READY FOR<br/>OFFLINE WORK</strong><small>All field dependencies are cached</small></div></div><div className="checks">{["App available offline","Assignments downloaded","Machine data available","Templates available","Permissions cached","Storage available"].map(x => <div key={x}><CheckCircle2 size={16}/><span>{x}</span><small>Verified</small></div>)}</div></div></section><section className="panel workload"><PanelHeader title="Today’s workload" icon={<BarChart3 size={17}/>} action={<button className="text-btn" onClick={() => go("inspections")}>View all <ArrowRight size={14}/></button>}/><div className="workload-rows">{[["INS-2026-TN-0001","TRF-102 · Substation A","High","2h 14m","high"],["INS-2026-TN-0002","TRF-117 · Substation B","Medium","5h 08m","medium"],["INS-2026-TN-0003","PMP-301 · Pump House 4","Low","Tomorrow","low"]].map((x, i) => <button className="work-row" onClick={openInspection} key={x[0]}><div className="work-index">0{i+1}</div><div className="work-main"><strong>{x[0]}</strong><span>{x[1]}</span></div><span className={"priority " + x[4]}>{x[2]}</span><div className="work-time"><Clock3 size={13}/>{x[3]}</div><ChevronRight size={15}/></button>)}</div></section></div><div className="lower-grid"><section className="panel activity-panel"><PanelHeader title="Recent activity" icon={<Activity size={17}/>} action={<button className="text-btn" onClick={() => go("audit")}>Audit trail <ArrowRight size={14}/></button>}/><Timeline items={[["Inspection created","INS-2026-TN-0001","Arun Kumar","10:00","blue"],["Checklist updated","Oil Temperature · 78 °C","Saved locally","10:41","amber"],["Photo evidence added","EVD-2026-00001","TRF-102 / Item 04","10:43","purple"],["Conflict detected","Temperature value","Sync queue","10:44","red"]]}/></section><section className="panel sync-panel"><PanelHeader title="Sync health" icon={<RefreshCw size={17}/>} action={<button className="icon-btn"><MoreHorizontal size={17}/></button>}/><div className="sync-health"><div className="health-number"><strong>98.4<span>%</span></strong><small>Successful operations</small></div><div className="health-bars">{Array.from({length: 18}).map((_,i)=><i key={i} style={{height: `${18 + ((i*17)%60)}%`}}></i>)}</div></div><div className="sync-meta"><div><span className="dot green-dot"></span>Last sync <strong>Today, 09:58</strong></div><div><span className="dot amber-dot"></span>{offline ? "Offline queue" : "Pending changes"} <strong>{savedCount} operations</strong></div></div></section></div></> }
+function Dashboard({ go, offline, savedCount, openInspection }: any) { return <><div className="dash-actions"><button className="btn secondary" onClick={() => go("scanner")}><QrCode size={16}/> Scan machine</button><button className="btn primary" onClick={() => openInspection()}><PlusIcon/> Start inspection</button></div><div className="stat-grid">{[["Assigned inspections","12","+2 this week","blue",ClipboardCheck,"inspections"],["In progress","03","2 due today","amber",Activity,"inspections"],["Submitted","08","+4 this week","green",Send,"inspections"],["Pending review","04","Supervisor queue","violet",Clock3,"inspections"],["Conflicts","01","Needs resolution","red",AlertTriangle,"conflicts"],["Approved","27","92% acceptance","teal",CheckCircle2,"history"]].map(([label,value,sub,color,Icon,dest]: any[]) => <button className="stat-card stat-card-btn" key={label as string} onClick={() => go(dest)}><div className={"stat-icon " + color}><Icon size={17}/></div><div className="stat-copy"><span>{label}</span><strong>{value}</strong><small className={color === "red" ? "danger-text" : ""}>{sub}</small></div><ChevronRight size={14} className="muted-icon stat-arrow"/></button>)}</div><div className="dashboard-grid"><section className="panel readiness"><PanelHeader title="Offline readiness" icon={<Wifi size={17}/>} action={<span className="ready-chip"><span></span> Device ready</span>}/><div className="readiness-body"><div className="readiness-score"><div className="score-ring"><strong>100</strong><span>%</span></div><div><strong>READY FOR<br/>OFFLINE WORK</strong><small>All field dependencies are cached</small></div></div><div className="checks">{["App available offline","Assignments downloaded","Machine data available","Templates available","Permissions cached","Storage available"].map(x => <div key={x}><CheckCircle2 size={16}/><span>{x}</span><small>Verified</small></div>)}</div></div></section><section className="panel workload"><PanelHeader title="Today’s workload" icon={<BarChart3 size={17}/>} action={<button className="text-btn" onClick={() => go("inspections")}>View all <ArrowRight size={14}/></button>}/><div className="workload-rows">{[["INS-2026-TN-0001","TRF-102 · Substation A","High","2h 14m","high"],["INS-2026-TN-0002","TRF-117 · Substation B","Medium","5h 08m","medium"],["INS-2026-TN-0003","PMP-301 · Pump House 4","Low","Tomorrow","low"]].map((x, i) => <button className="work-row" onClick={() => openInspection(x[0])} key={x[0]}><div className="work-index">0{i+1}</div><div className="work-main"><strong>{x[0]}</strong><span>{x[1]}</span></div><span className={"priority " + x[4]}>{x[2]}</span><div className="work-time"><Clock3 size={13}/>{x[3]}</div><ChevronRight size={15}/></button>)}</div></section></div><div className="lower-grid"><section className="panel activity-panel"><PanelHeader title="Recent activity" icon={<Activity size={17}/>} action={<button className="text-btn" onClick={() => go("audit")}>Audit trail <ArrowRight size={14}/></button>}/><Timeline items={[["Inspection created","INS-2026-TN-0001","Pragatheesh","10:00","blue"],["Checklist updated","Oil Temperature · 78 °C","Saved locally","10:41","amber"],["Photo evidence added","EVD-2026-00001","TRF-102 / Item 04","10:43","purple"],["Conflict detected","Temperature value","Sync queue","10:44","red"]]}/></section><section className="panel sync-panel"><PanelHeader title="Sync health" icon={<RefreshCw size={17}/>} action={<button className="icon-btn"><MoreHorizontal size={17}/></button>}/><div className="sync-health"><div className="health-number"><strong>98.4<span>%</span></strong><small>Successful operations</small></div><div className="health-bars">{Array.from({length: 18}).map((_,i)=><i key={i} style={{height: `${18 + ((i*17)%60)}%`}}></i>)}</div></div><div className="sync-meta"><div><span className="dot green-dot"></span>Last sync <strong>Today, 09:58</strong></div><div><span className="dot amber-dot"></span>{offline ? "Offline queue" : "Pending changes"} <strong>{savedCount} operations</strong></div></div></section></div></> }
 function PanelHeader({ title, icon, action }: any) { return <div className="panel-header"><div><span className="panel-icon">{icon}</span><h3>{title}</h3></div>{action}</div> }
 function Timeline({ items }: any) { return <div className="timeline">{items.map((x: any) => <div className="timeline-item" key={x[1]}><div className={"timeline-dot " + x[4]}></div><div><strong>{x[0]}</strong><span>{x[1]}</span><small>{x[2]}</small></div><time>{x[3]}</time></div>)}</div> }
 function PlusIcon(){return <span className="plus-icon">+</span>}
@@ -484,11 +1062,11 @@ function Inspections({ openInspection, startNewInspection, inspectionsList }: an
     r.machine.toLowerCase().includes(q.toLowerCase()) || 
     r.site.toLowerCase().includes(q.toLowerCase())
   ); 
-  return <><PageIntro eyebrow="WORKSPACE / INSPECTIONS" title="My inspections" description="Manage field inspections, completion state, and submission readiness." actions={<button className="btn primary" onClick={() => startNewInspection()}><PlusIcon/> New inspection</button>}/><div className="toolbar"><div className="searchbox"><Search size={16}/><input placeholder="Search by inspection ID, machine, or site" value={q} onChange={e=>setQ(e.target.value)}/></div><button className="btn secondary"><Filter size={15}/> Filters <span className="filter-count">2</span></button><button className="btn secondary"><SlidersHorizontal size={15}/> Sort</button><div className="view-toggle"><button className="active"><Table2 size={16}/></button><button><ListChecks size={16}/></button></div></div><section className="panel table-panel"><div className="table-top"><div><strong>Inspection register</strong><span>{filtered.length} records · Saved locally &amp; synced</span></div><button className="text-btn"><Download size={14}/> Export CSV</button></div><div className="table-wrap"><table><thead><tr><th>Inspection ID</th><th>Machine / site</th><th>Status</th><th>Priority</th><th>Last updated</th><th>Completion</th><th></th></tr></thead><tbody>{filtered.map((r: any)=><tr key={r.id} onClick={openInspection}><td><strong className="linkish">{r.id}</strong><span className="table-sub">Officer · Arun Kumar</span></td><td><strong>{r.machine}</strong><span className="table-sub">{r.site}</span></td><td><StatusChip status={r.status}/></td><td><span className={"priority " + r.priority.toLowerCase()}>{r.priority}</span></td><td>{r.date}</td><td><div className="completion"><div><i style={{width:r.completion}}></i></div><span>{r.completion}</span></div></td><td><ChevronRight size={16}/></td></tr>)}</tbody></table></div></section></> 
+  return <><PageIntro eyebrow="WORKSPACE / INSPECTIONS" title="My inspections" description="Manage field inspections, completion state, and submission readiness." actions={<button className="btn primary" onClick={() => startNewInspection()}><PlusIcon/> New inspection</button>}/><div className="toolbar"><div className="searchbox"><Search size={16}/><input placeholder="Search by inspection ID, machine, or site" value={q} onChange={e=>setQ(e.target.value)}/></div><button className="btn secondary"><Filter size={15}/> Filters <span className="filter-count">2</span></button><button className="btn secondary"><SlidersHorizontal size={15}/> Sort</button><div className="view-toggle"><button className="active"><Table2 size={16}/></button><button><ListChecks size={16}/></button></div></div><section className="panel table-panel"><div className="table-top"><div><strong>Inspection register</strong><span>{filtered.length} records · Saved locally &amp; synced</span></div><button className="text-btn"><Download size={14}/> Export CSV</button></div><div className="table-wrap"><table><thead><tr><th>Inspection ID</th><th>Machine / site</th><th>Status</th><th>Priority</th><th>Last updated</th><th>Completion</th><th></th></tr></thead><tbody>{filtered.map((r: any)=><tr key={r.id} onClick={() => openInspection(r.id)}><td><strong className="linkish">{r.id}</strong><span className="table-sub">Officer · Pragatheesh</span></td><td><strong>{r.machine}</strong><span className="table-sub">{r.site}</span></td><td><StatusChip status={r.status}/></td><td><span className={"priority " + r.priority.toLowerCase()}>{r.priority}</span></td><td>{r.date}</td><td><div className="completion"><div><i style={{width:r.completion}}></i></div><span>{r.completion}</span></div></td><td><ChevronRight size={16}/></td></tr>)}</tbody></table></div></section></> 
 }
 function StatusChip({status}: {status:string}) { return <span className={"status-chip " + status.toLowerCase().replace(" ","-")}><span></span>{status}</span> }
 
-function Workspace({status,setStatus,checklist,setChecklist,saveEdit,offline,go,resolved,setResolved,selectedMachineKey,setSelectedMachineKey,manualMachineCode,setManualMachineCode,activeInspectionId,submittedAt,onSubmitClick}:any){
+function Workspace({status,setStatus,checklist,setChecklist,saveEdit,offline,go,resolved,setResolved,selectedMachineKey,setSelectedMachineKey,manualMachineCode,setManualMachineCode,activeInspectionId,submittedAt,onSubmitClick,savedCount,onCaptureEvidence,evidenceList,onDeleteEvidence,onSyncEvidence}:any){
   const [tab,setTab]=useState("Checklist");
   const filledCount = checklist.filter((x:any)=>x.value && x.value.trim() !== "").length;
   const totalCount = checklist.length;
@@ -559,13 +1137,364 @@ function Workspace({status,setStatus,checklist,setChecklist,saveEdit,offline,go,
     </div>
   </div>
   <div className="workspace-tabs">{["Overview","Checklist","Evidence","Remarks","History","Conflicts","Submission"].map(x=><button className={tab===x?"active":""} onClick={()=>setTab(x)} key={x}>{x}{x === "Conflicts" && !resolved && <em>1</em>}</button>)}</div>
-  {tab === "Checklist" && <div className="workspace-grid"><section className="panel checklist-panel"><div className="checklist-heading"><div><div className="eyebrow">CHECKLIST / {selectedMachineKey} ROUTINE</div><h3>Equipment condition assessment ({activeMachine.name})</h3><p>Complete all required readings before submitting this inspection.</p></div><div className="progress-circle"><strong>{readinessPercent}%</strong><span>complete</span></div></div><div className="check-items">{checklist.map((item:any,i:number)=><div className="check-item" key={item.id + item.label}><div className="check-num">{item.id}</div><div className="check-label"><strong>{item.label}{item.required&&<b>*</b>}</strong><span>{item.helper}</span></div><div className="check-field"><input value={item.value} onChange={e=>saveEdit(i,e.target.value)}/>{(status === "SUBMITTED" || status === "APPROVED") && <CheckCircle2 size={16}/>}</div><MoreHorizontal size={17}/></div>)}<div className="remarks-field"><label>06 · Remarks <span>optional</span></label><textarea placeholder="Add field observations or remarks…" defaultValue="Minor surface dust observed. No action required."/></div></div><div className="checklist-footer"><span><LockKeyhole size={14}/> Required fields validated locally</span><button className="btn primary" onClick={onSubmitClick} disabled={status === "SUBMITTED" || status === "APPROVED"}>{status === "DRAFT" ? <><Send size={15}/> Submit for review</> : <><CheckCircle2 size={15}/> Submitted</>}</button></div></section><aside className="workspace-side"><section className="panel mini-panel"><PanelHeader title="Submission readiness" icon={<FileCheck2 size={16}/>} /><div className="readiness-meter"><div><strong>{readinessPercent}%</strong><span>{readinessPercent === 100 ? "Ready to submit" : `${filledCount} of ${totalCount} items completed`}</span></div><div className="meter"><i style={{width: `${readinessPercent}%`}}></i></div></div><div className="mini-check"><CheckCircle2 size={15}/> Checklist complete <span>{filledCount} / {totalCount}</span></div><div className={resolved?"mini-check":"mini-check warn"}>{resolved?<CheckCircle2 size={15}/>:<AlertTriangle size={15}/>} Critical conflicts {resolved?"Resolved":"1 unresolved"}</div></section><section className="panel mini-panel"><PanelHeader title="Field traceability" icon={<Link2 size={16}/>} /><div className="trace-row"><div className="avatar small">AK</div><div><strong>Arun Kumar</strong><span>Field Officer · EMP-1024</span></div></div><div className="trace-info"><span>Machine</span><strong className="mono">{manualMachineCode}</strong><span>Operation ID</span><strong className="mono">OP-7F31-A9C2</strong><span>Submitted At</span><strong>{submittedAt ? submittedAt : "Pending submission"}</strong></div></section></aside></div>}
+  {tab === "Checklist" && <div className="workspace-grid"><section className="panel checklist-panel"><div className="checklist-heading"><div><div className="eyebrow">CHECKLIST / {selectedMachineKey} ROUTINE</div><h3>Equipment condition assessment ({activeMachine.name})</h3><p>Complete all required readings before submitting this inspection.</p></div><div className="progress-circle"><strong>{readinessPercent}%</strong><span>complete</span></div></div><div className="check-items">{checklist.map((item:any,i:number)=><div className="check-item" key={item.id + item.label}><div className="check-num">{item.id}</div><div className="check-label"><strong>{item.label}{item.required&&<b>*</b>}</strong><span>{item.helper}</span></div><div className="check-field"><input value={item.value} onChange={e=>saveEdit(i,e.target.value)}/>{(status === "SUBMITTED" || status === "APPROVED") && <CheckCircle2 size={16}/>}</div><MoreHorizontal size={17}/></div>)}<div className="remarks-field"><label>06 · Remarks <span>optional</span></label><textarea placeholder="Add field observations or remarks…" defaultValue="Minor surface dust observed. No action required."/></div></div><div className="checklist-footer"><span><LockKeyhole size={14}/> Required fields validated locally</span><button className="btn primary" onClick={onSubmitClick} disabled={status === "SUBMITTED" || status === "APPROVED"}>{status === "DRAFT" ? <><Send size={15}/> Submit for review</> : <><CheckCircle2 size={15}/> Submitted</>}</button></div></section><aside className="workspace-side"><section className="panel mini-panel"><PanelHeader title="Submission readiness" icon={<FileCheck2 size={16}/>} /><div className="readiness-meter"><div><strong>{readinessPercent}%</strong><span>{readinessPercent === 100 ? "Ready to submit" : `${filledCount} of ${totalCount} items completed`}</span></div><div className="meter"><i style={{width: `${readinessPercent}%`}}></i></div></div><div className="mini-check"><CheckCircle2 size={15}/> Checklist complete <span>{filledCount} / {totalCount}</span></div><div className={resolved?"mini-check":"mini-check warn"}>{resolved?<CheckCircle2 size={15}/>:<AlertTriangle size={15}/>} Critical conflicts {resolved?"Resolved":"1 unresolved"}</div></section><section className="panel mini-panel"><PanelHeader title="Field traceability" icon={<Link2 size={16}/>} /><div className="trace-row"><div className="avatar small">PR</div><div><strong>Pragatheesh</strong><span>Field Officer · EMP-1024</span></div></div><div className="trace-info"><span>Machine</span><strong className="mono">{manualMachineCode}</strong><span>Operation ID</span><strong className="mono">OP-7F31-A9C2</strong><span>Submitted At</span><strong>{submittedAt ? submittedAt : "Pending submission"}</strong></div></section></aside></div>}
   {tab === "Conflicts" && <Conflicts resolved={resolved} setResolved={(v:any)=>{setResolved(v);toast.success("Conflict resolved",{description:"Resolution appended to the audit trail."})}}/>}
   {tab === "History" && <HistoryPage/>}
-  {tab === "Evidence" && <Evidence savedCount={2}/>} 
+  {tab === "Evidence" && <Evidence evidenceList={evidenceList} savedCount={savedCount} onCaptureEvidence={onCaptureEvidence} onDeleteEvidence={onDeleteEvidence} onSyncEvidence={onSyncEvidence} offline={offline}/>} 
   {tab === "Submission" && <Submission status={status} onSubmitClick={onSubmitClick}/>} 
   {tab === "Overview" && <Overview activeMachine={activeMachine} machineCode={manualMachineCode}/>}
   {tab === "Remarks" && <div className="empty-tab panel"><Sparkles size={20}/><h3>Remarks workspace</h3><p>Field notes, observations, and follow-up actions are protected locally.</p></div>}</>
+}
+
+function OfflineWorkspace({ go, refreshQueue, setInspectionsList, onSubmitted }: any) {
+  const [offlineId] = useState(() => `INS-OFF-${Date.now().toString().slice(-4)}`);
+  const [selectedMachine, setSelectedMachine] = useState("TRF-102");
+  const [manualCode, setManualCode] = useState("TRF-102");
+  const [checklist, setChecklist] = useState(() =>
+    (machineTemplates["TRF-102"]?.checklist || []).map(x => ({ ...x }))
+  );
+  const [notes, setNotes] = useState(() => read("off2field-offline-notes", ""));
+  const [photos, setPhotos] = useState<Array<{ id: string; name: string; dataUrl: string; timestamp: string }>>(() =>
+    read("off2field-offline-photos", [])
+  );
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  useEffect(() => {
+    persist("off2field-offline-notes", notes);
+  }, [notes]);
+
+  useEffect(() => {
+    persist("off2field-offline-photos", photos);
+  }, [photos]);
+
+  const activeMachine = machineTemplates[selectedMachine] || {
+    name: `Custom Machine (${manualCode})`,
+    location: "Field Substation",
+    type: "Field Equipment",
+    category: "General",
+    checklist: []
+  };
+
+  const handleMachineChange = (key: string) => {
+    setSelectedMachine(key);
+    setManualCode(key);
+    if (machineTemplates[key]) {
+      setChecklist(machineTemplates[key].checklist.map(x => ({ ...x })));
+      toast.success(`Loaded latest checklist for ${key}`);
+    }
+  };
+
+  const handleChecklistEdit = (index: number, val: string) => {
+    setChecklist(prev => prev.map((item, idx) => idx === index ? { ...item, value: val } : item));
+  };
+
+  const handlePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+
+    Array.from(files).forEach(file => {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const dataUrl = event.target?.result as string;
+        if (dataUrl) {
+          const newPhoto = {
+            id: `PHOTO-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+            name: file.name || "machine_photo.jpg",
+            dataUrl,
+            timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+          };
+          setPhotos(prev => [newPhoto, ...prev]);
+          toast.success("Machine photo saved locally", { description: file.name });
+        }
+      };
+      reader.readAsDataURL(file);
+    });
+    e.target.value = "";
+  };
+
+  const removePhoto = (photoId: string) => {
+    setPhotos(prev => prev.filter(p => p.id !== photoId));
+    toast("Photo removed from local queue");
+  };
+
+  const filledCount = checklist.filter(x => x.value && x.value.trim() !== "").length;
+  const totalCount = checklist.length;
+  const percent = totalCount > 0 ? Math.round((filledCount / totalCount) * 100) : 100;
+
+  const handleSubmit = async () => {
+    setIsSubmitting(true);
+    const nowIso = new Date().toISOString();
+
+    const record = {
+      id: offlineId,
+      machine: manualCode || selectedMachine,
+      site: activeMachine.location || "Field Substation",
+      status: "SUBMITTED",
+      checklist,
+      notes,
+      images: photos,
+      resolved: false,
+      submittedAt: nowIso,
+      syncStatus: "PENDING" as const,
+      createdAt: nowIso,
+      updatedAt: nowIso,
+    };
+
+    try {
+      await saveInspection(record);
+      await enqueueSyncItem({
+        entityId: offlineId,
+        entityName: `Inspection ${offlineId.slice(-4)}`,
+        operationType: "SUBMIT_INSPECTION",
+        title: `Offline Submit · ${manualCode || selectedMachine} (${photos.length} photos)`,
+        machine: manualCode || selectedMachine,
+        site: activeMachine.location || "Field Substation",
+        status: "PENDING",
+        payload: record,
+      });
+      if (refreshQueue) await refreshQueue();
+      setInspectionsList((prev: any[]) => [
+        {
+          id: offlineId,
+          machine: manualCode || selectedMachine,
+          site: activeMachine.location?.split("·")[0]?.trim() || "Field Site",
+          status: "SUBMITTED",
+          priority: "HIGH",
+          date: "Today",
+          completion: "100%",
+        },
+        ...prev,
+      ]);
+
+      toast.success("Inspection submitted & stored locally!", {
+        description: `Saved to IndexedDB (${photos.length} photos, ${checklist.length} checklist items). Queued for sync.`,
+      });
+
+      onSubmitted(offlineId);
+    } catch (err) {
+      console.error("Failed to store offline inspection in IndexedDB:", err);
+      toast.error("Local storage error", { description: "Could not save to IndexedDB." });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  return (
+    <>
+      <div className="workspace-header">
+        <button className="back-btn" onClick={() => go("inspections")}>← All Inspections</button>
+        <div className="workspace-title">
+          <div>
+            <div className="eyebrow" style={{color:"#f59e0b"}}>OFFLINE FIELD WORKSPACE · LOCAL STORAGE ONLY</div>
+            <h2>{offlineId}</h2>
+          </div>
+          <span className="status-chip draft"><span></span>OFFLINE DRAFT</span>
+        </div>
+
+        {/* Machine selection */}
+        <div className="machine-selector-wrap">
+          <span style={{fontSize:"11px",fontWeight:600,color:"#415662"}}>Machine:</span>
+          <select className="machine-select" value={selectedMachine} onChange={e => handleMachineChange(e.target.value)}>
+            <optgroup label="1. Transformers (TRF)">
+              <option value="TRF-102">TRF-102 · Transformer T-102 (Substation A)</option>
+              <option value="TRF-117">TRF-117 · Transformer T-117 (Substation B)</option>
+              <option value="TRF-203">TRF-203 · Transformer T-203 (Substation C)</option>
+              <option value="TRF-305">TRF-305 · Distribution Transformer T-305 (Feeder Yard 2)</option>
+            </optgroup>
+            <optgroup label="2. Pumps & Motors (PMP / MTR)">
+              <option value="PMP-301">PMP-301 · Cooling Pump P-301 (Pump House 4)</option>
+              <option value="PMP-302">PMP-302 · Boiler Feed Pump P-302 (Thermal Station 1)</option>
+              <option value="MTR-105">MTR-105 · Induction Motor M-105 (Manali Plant)</option>
+            </optgroup>
+            <optgroup label="3. Generators & Turbines (GEN / TRB)">
+              <option value="GEN-405">GEN-405 · Diesel Generator DG-405 (Power Plant 2)</option>
+              <option value="GEN-502">GEN-502 · Gas Turbine Generator GT-502 (Basin Bridge)</option>
+            </optgroup>
+            <optgroup label="4. Switchgear & Breakers (SWG / CBK)">
+              <option value="CBK-201">CBK-201 · Vacuum Circuit Breaker VCB-201 (Control Room A)</option>
+              <option value="SWG-501">SWG-501 · Gas Insulated Switchgear GIS-501 (220kV GIS Bay)</option>
+            </optgroup>
+            <optgroup label="5. Renewables & Power Systems (SLR / BTY)">
+              <option value="SLR-101">SLR-101 · Solar String Inverter INV-101 (Solar Farm 3)</option>
+              <option value="BTY-202">BTY-202 · Battery Bank BTY-202 (DC Power Room)</option>
+            </optgroup>
+          </select>
+          <span style={{fontSize:"11px",color:"#87949c",margin:"0 4px"}}>or Custom Code:</span>
+          <input className="machine-input" placeholder="e.g. TRF-102" value={manualCode} onChange={e => {
+            setManualCode(e.target.value);
+            const uc = e.target.value.trim().toUpperCase();
+            if (machineTemplates[uc]) {
+              setSelectedMachine(uc);
+              setChecklist(machineTemplates[uc].checklist.map(x => ({ ...x })));
+            }
+          }} />
+        </div>
+
+        <div className="workspace-meta">
+          <div><span>Target Asset</span><strong>{manualCode || selectedMachine} · {activeMachine.name}</strong></div>
+          <div><span>Location</span><strong>{activeMachine.location}</strong></div>
+          <div><span>Storage Target</span><strong className="online-label"><HardDrive size={14}/> IndexedDB (Dexie)</strong></div>
+        </div>
+      </div>
+
+      <div className="workspace-grid">
+        <section className="panel checklist-panel">
+          <div className="checklist-heading">
+            <div>
+              <div className="eyebrow">OFFLINE ROUTINE / {selectedMachine}</div>
+              <h3>Latest Equipment Assessment Checklist</h3>
+              <p>Values pre-filled with latest parameters. Edit all observed readings on site.</p>
+            </div>
+            <div className="progress-circle"><strong>{percent}%</strong><span>ready</span></div>
+          </div>
+
+          <div className="check-items">
+            {checklist.map((item, i) => (
+              <div className="check-item" key={item.id + item.label}>
+                <div className="check-num">{item.id}</div>
+                <div className="check-label">
+                  <strong>{item.label}{item.required && <b>*</b>}</strong>
+                  <span>{item.helper}</span>
+                </div>
+                <div className="check-field">
+                  <input
+                    value={item.value}
+                    placeholder="Enter reading..."
+                    onChange={e => handleChecklistEdit(i, e.target.value)}
+                  />
+                  {item.value && <CheckCircle2 size={16} color="#10b981"/>}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* Notes & Observations Section */}
+          <div style={{marginTop:24,borderTop:"1px solid #e2e8f0",paddingTop:20}}>
+            <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10}}>
+              <FileText size={16} color="#2563eb"/>
+              <strong style={{fontSize:13,color:"var(--ink)"}}>Field Notes &amp; Observations</strong>
+              <span style={{fontSize:10,background:"#f1f5f9",padding:"2px 6px",borderRadius:4,color:"#64748b"}}>Saved locally</span>
+            </div>
+            <textarea
+              className="offline-notes-box"
+              placeholder="Record equipment condition, abnormal sounds, oil leak observations, temperature anomalies, or notes for supervisor review..."
+              value={notes}
+              onChange={e => setNotes(e.target.value)}
+            />
+          </div>
+
+          {/* Machine Photos Upload Section */}
+          <div style={{marginTop:24,borderTop:"1px solid #e2e8f0",paddingTop:20}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+              <div style={{display:"flex",alignItems:"center",gap:8}}>
+                <Camera size={16} color="#2563eb"/>
+                <strong style={{fontSize:13,color:"var(--ink)"}}>Machine Photos ({photos.length})</strong>
+                <span style={{fontSize:10,background:"#dbeafe",padding:"2px 6px",borderRadius:4,color:"#1d4ed8",fontWeight:600}}>Device Storage</span>
+              </div>
+              <label className="btn secondary" style={{cursor:"pointer",padding:"5px 12px",fontSize:"12px"}}>
+                <Upload size={14}/> Add Photo / Capture
+                <input
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                  multiple
+                  onChange={handlePhotoUpload}
+                  style={{display:"none"}}
+                />
+              </label>
+            </div>
+
+            {photos.length === 0 ? (
+              <label className="photo-upload-trigger">
+                <Camera size={28} strokeWidth={1.5}/>
+                <span>Click or tap to capture/upload machine photos</span>
+                <small style={{color:"#94a3b8"}}>Stored locally in browser device storage (IndexedDB)</small>
+                <input
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                  multiple
+                  onChange={handlePhotoUpload}
+                />
+              </label>
+            ) : (
+              <div className="offline-photo-grid">
+                <label className="photo-upload-trigger" style={{minHeight:110}}>
+                  <Camera size={24} strokeWidth={1.5}/>
+                  <span>Add More</span>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    capture="environment"
+                    multiple
+                    onChange={handlePhotoUpload}
+                  />
+                </label>
+                {photos.map(p => (
+                  <div className="photo-card" key={p.id}>
+                    <img src={p.dataUrl} alt={p.name} />
+                    <button
+                      type="button"
+                      className="photo-delete-btn"
+                      title="Delete photo"
+                      onClick={() => removePhoto(p.id)}
+                    >
+                      <Trash2 size={12}/>
+                    </button>
+                    <div className="photo-info">
+                      <strong title={p.name}>{p.name}</strong>
+                      <span>{p.timestamp}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="checklist-footer" style={{marginTop:24}}>
+            <span><LockKeyhole size={14}/> IndexedDB offline storage protected</span>
+            <button
+              className="btn primary"
+              onClick={handleSubmit}
+              disabled={isSubmitting}
+            >
+              <Send size={15}/> {isSubmitting ? "Saving locally..." : "Submit Offline Inspection"}
+            </button>
+          </div>
+        </section>
+
+        <aside className="workspace-side">
+          <section className="panel mini-panel">
+            <PanelHeader title="Submission readiness" icon={<FileCheck2 size={16}/>} />
+            <div className="readiness-mini">
+              <div className="bar"><div><i style={{width:`${percent}%`}}></i></div><span>{percent}%</span></div>
+              <small>{filledCount} of {totalCount} fields complete</small>
+            </div>
+          </section>
+
+          <section className="panel mini-panel">
+            <PanelHeader title="Offline Storage Specs" icon={<ShieldCheck size={16}/>} />
+            <div className="trace-list">
+              <div><span>Database</span><strong>Off2FieldDB (IndexedDB)</strong></div>
+              <div><span>Storage Model</span><strong>Dexie 4.4</strong></div>
+              <div><span>Pending Sync</span><strong className="amber-text">syncStatus = PENDING</strong></div>
+              <div><span>Photos Attached</span><strong>{photos.length} captured</strong></div>
+              <div><span>Connection</span><strong className="danger-text"><CloudOff size={13}/> Disconnected</strong></div>
+            </div>
+          </section>
+
+          <section className="panel mini-panel">
+            <PanelHeader title="Equipment Specs" icon={<Cog size={16}/>} />
+            <div className="trace-list">
+              <div><span>Category</span><strong>{activeMachine.category}</strong></div>
+              <div><span>Type</span><strong>{activeMachine.type}</strong></div>
+              <div><span>Location</span><strong>{activeMachine.location}</strong></div>
+            </div>
+          </section>
+        </aside>
+      </div>
+    </>
+  );
 }
 
 function Overview({ activeMachine, machineCode }: any){ return <div className="overview-grid"><div className="panel overview-hero"><div className="machine-illustration"><div className="transformer"><span></span><span></span><span></span></div></div><div><div className="eyebrow">MACHINE PROFILE</div><h3>{machineCode || "TRF-102"} · {activeMachine?.name || "Transformer T-102"}</h3><p>{activeMachine?.type || "Operational equipment"} · Installed 2018</p><div className="overview-tags"><span>{activeMachine?.location || "Substation A"}</span><span>Last inspected 18 Sep 2026</span></div></div></div><div className="panel"><PanelHeader title="Previous readings" icon={<History size={16}/>} /><div className="reading-grid">{[["Primary parameter","72 °C","18 Sep"],["Secondary parameter","84 %","18 Sep"],["Load current","184 A","18 Sep"],["Condition","Normal","18 Sep"]].map(x=><div key={x[0]}><span>{x[0]}</span><strong>{x[1]}</strong><small>{x[2]}</small></div>)}</div></div></div>}
@@ -585,14 +1514,308 @@ function Machines({go, startNewInspection}:any){
 }
 function Scanner({go, startNewInspection}:any){
   const [scanned,setScanned]=useState(false); 
-  return <><PageIntro eyebrow="FIELD TOOLS / IDENTIFICATION" title="QR scanner" description="Identify a machine from its QR label, even when the device is offline." actions={<span className="ready-chip"><span></span> Camera ready</span>}/><div className="scanner-layout"><section className="panel scanner-panel"><div className="scanner-frame"><div className="scan-corner tl"></div><div className="scan-corner tr"></div><div className="scan-corner bl"></div><div className="scan-corner br"></div><div className="scan-line"></div><QrCode size={78} strokeWidth={1}/></div><p>Point camera at a machine QR label</p><button className="btn primary" onClick={()=>{setScanned(true);toast.success("Machine identified",{description:"TRF-102 found in offline machine cache."})}}><QrCode size={16}/> Simulate scan · TRF-102</button></section>{scanned?<section className="panel machine-result"><div className="result-badge"><CheckCircle2 size={16}/> MACHINE FOUND OFFLINE</div><div className="eyebrow">MACHINE RECORD</div><h3>TRF-102 · Transformer T-102</h3><p>Substation A · Chennai North</p><div className="result-list"><div><span>Status</span><strong className="online-label"><span className="status-dot"></span> Operational</strong></div><div><span>Last inspection</span><strong>18 Sep 2026</strong></div><div><span>Previous readings</span><strong>6 values cached</strong></div><div><span>QR identifier</span><strong className="mono">TRF-102</strong></div></div><div className="result-actions"><button className="btn primary" onClick={()=>startNewInspection("TRF-102")}>Start inspection <ArrowRight size={15}/></button><button className="btn secondary" onClick={()=>go("history")}>View history</button></div></section>:<section className="panel scanner-help"><QrCode size={30}/><h3>Fast, offline identification</h3><p>Machine records are cached on this device. Scan a label to retrieve specifications, prior readings, and inspection history without a network connection.</p></section>}</div></>
+  return <><PageIntro eyebrow="FIELD TOOLS / IDENTIFICATION" title="QR scanner" description="Identify a machine from its QR label, even when the device is offline." actions={<span className="ready-chip"><span></span> Camera ready</span>}/><div className="scanner-layout"><section className="panel scanner-panel"><div className="scanner-frame"><div className="scan-corner tl"></div><div className="scan-corner tr"></div><div className="scan-corner bl"></div><div className="scan-corner br"></div><div className="scan-line"></div><QrCode size={78} strokeWidth={1}/></div><p>Point camera at a machine QR label</p><button className="btn primary" onClick={()=>{setScanned(true);toast.success("Machine identified",{description:"TRF-102 found in offline machine cache."})}}><QrCode size={16}/> Simulate scan · TRF-102</button></section>{scanned?<section className="panel machine-result"><div className="result-badge"><CheckCircle2 size={16}/> MACHINE FOUND OFFLINE</div><div className="eyebrow">MACHINE RECORD</div><h3>TRF-102 · Transformer T-102</h3><p>Substation A · Chennai North</p><div className="result-list"><div><span>Status</span><strong className="online-label"><span className="status-dot"></span> Operational</strong></div><div><span>Last inspection</span><strong>18 Sep 2026</strong></div><div><span>Previous readings</span><strong>6 values cached</strong></div><div><span>QR identifier</span><strong className="mono">TRF-102</strong></div></div><div className="result-actions"><button className="btn primary" onClick={()=>startNewInspection("TRF-102")}>Start inspection <ArrowRight size={15}/></button><button className="btn secondary" onClick={()=>go("history")}>View history</button></div></section>:<section className="panel scanner-help"><QrCode size={30}/><h3>Fast, offline identification</h3><p>Machine records are cached on this device. Scan a label to retrieve specifications, prior readings, and inspection history without a network connection.</p></section>}</div></>;
 }
 
-function Evidence({savedCount}:any){return <><PageIntro eyebrow="INSPECTION / EVIDENCE" title="Evidence gallery" description="Photos and files are stored locally first, then uploaded through the sync queue." actions={<button className="btn primary" onClick={()=>toast.success("Evidence captured locally",{description:"EVD-2026-00002 added to the upload queue."})}><Upload size={15}/> Capture photo</button>}/><div className="evidence-summary"><div><HardDrive size={17}/><span>Local evidence</span><strong>06 items</strong></div><div><Upload size={17}/><span>Pending upload</span><strong>{savedCount + 1} items</strong></div><div><CheckCircle2 size={17}/><span>Uploaded</span><strong>14 items</strong></div></div><div className="evidence-grid">{[["EVD-2026-00001","Oil temperature gauge","Uploaded","10:43","amber"],["EVD-2026-00002","Equipment condition","Saved locally","10:45","blue"],["EVD-2026-00003","Safety lockout tag","Uploaded","10:46","purple"],["EVD-2026-00004","Transformer nameplate","Uploaded","10:49","green"]].map(x=><div className="evidence-card panel" key={x[0]}><div className={"evidence-preview " + x[4]}><FileText size={30}/><span>PHOTO</span></div><div className="evidence-copy"><strong>{x[1]}</strong><span>{x[0]} · INS-2026-TN-0001</span><small><span className={x[2] === "Uploaded" ? "green-dot" : "amber-dot"}></span>{x[2]} · {x[3]}</small></div><MoreHorizontal size={16}/></div>)}</div></>}
+function Evidence({ evidenceList = [], savedCount, onCaptureEvidence, onDeleteEvidence, onSyncEvidence, offline }: any) {
+  const [lightbox, setLightbox] = useState<any>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const items: any[] = Array.isArray(evidenceList) ? evidenceList : [];
+  const pendingItems = items.filter((x: any) => x.syncStatus === "PENDING" || x.syncStatus === "FAILED");
+  const syncedItems = items.filter((x: any) => x.syncStatus === "SYNCED");
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    for (const file of Array.from(e.target.files || [])) { if (onCaptureEvidence) await onCaptureEvidence({ file }); }
+    e.target.value = "";
+  };
+  const chipClass = (s: string) => s === "SYNCED" ? "evidence-chip-status synced" : s === "SYNCING" ? "evidence-chip-status syncing" : "evidence-chip-status pending";
+  const chipLabel = (s: string) => s === "SYNCED" ? "✓ Uploaded" : s === "SYNCING" ? "↑ Syncing…" : s === "FAILED" ? "✕ Failed" : "● Pending";
+  const fmtSize = (b: number) => b > 1048576 ? `${(b/1048576).toFixed(1)} MB` : `${Math.round(b/1024)} KB`;
+  const fmtTime = (iso: string) => { try { return new Date(iso).toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"}); } catch { return "—"; } };
+  return (
+    <>
+      <PageIntro eyebrow="INSPECTION / EVIDENCE" title="Evidence gallery"
+        description="Photos and files are stored in IndexedDB first, then uploaded through the persistent sync queue."
+        actions={<>
+          <button className="btn secondary" onClick={() => fileInputRef.current?.click()}><ImageIcon size={14}/> Upload file</button>
+          <button className="btn primary" onClick={() => onCaptureEvidence?.()}><Camera size={15}/> Capture photo</button>
+          <input ref={fileInputRef} type="file" accept="image/*,application/pdf" multiple style={{display:"none"}} onChange={handleFileChange}/>
+        </>}
+      />
+      <div className="evidence-summary">
+        <div><HardDrive size={17}/><span>Stored locally</span><strong>{String(items.length).padStart(2,"0")} items</strong></div>
+        <div><Upload size={17}/><span>Pending upload</span><strong>{String(pendingItems.length).padStart(2,"0")} items</strong></div>
+        <div><CheckCircle2 size={17}/><span>Uploaded</span><strong>{String(syncedItems.length).padStart(2,"0")} items</strong></div>
+      </div>
+      {items.length === 0 && (
+        <div className="empty-tab panel" style={{marginTop:0}}>
+          <Archive size={22}/><h3>No evidence stored yet</h3>
+          <p>Capture a photo or upload a file — it will be saved locally to IndexedDB and queued for sync.</p>
+          <button className="btn primary" style={{marginTop:12}} onClick={() => onCaptureEvidence?.()}><Camera size={15}/> Capture first photo</button>
+        </div>
+      )}
+      {items.length > 0 && (
+        <div className="evidence-grid">
+          {items.map((ev: any) => (
+            <div className="evidence-card" key={ev.id}>
+              <div className="evidence-preview-wrap" onClick={() => setLightbox(ev)}>
+                {ev.dataUrl
+                  ? <img src={ev.dataUrl} alt={ev.title} style={{width:"100%",height:"100%",objectFit:"cover"}}/>
+                  : <div style={{display:"grid",placeItems:"center",height:"100%",color:"#64748b"}}><FileText size={32}/></div>}
+                <div className="evidence-preview-overlay"><Eye size={14}/> View</div>
+                <span className={chipClass(ev.syncStatus)}>{chipLabel(ev.syncStatus)}</span>
+                <span className="evidence-meta-pill">{ev.category || "PHOTO"}</span>
+              </div>
+              <div className="evidence-card-content">
+                <div className="evidence-card-title">{ev.title || ev.name}</div>
+                <div className="evidence-card-sub">{ev.id} · {ev.inspectionId || "—"}</div>
+                <div className="evidence-card-footer">
+                  <span style={{fontSize:9,color:"#94a3b8",fontFamily:"'DM Mono',monospace"}}>{fmtSize(ev.size||0)} · {fmtTime(ev.createdAt)}</span>
+                  <div className="evidence-btn-group">
+                    {(ev.syncStatus === "PENDING" || ev.syncStatus === "FAILED") && !offline && (
+                      <button className="evidence-icon-btn" title="Sync now" onClick={() => onSyncEvidence?.(ev)}><Upload size={12}/></button>
+                    )}
+                    <button className="evidence-icon-btn danger" title="Delete locally" onClick={() => onDeleteEvidence?.(ev.id)}><Trash2 size={12}/></button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      {lightbox && (
+        <div className="evidence-lightbox-backdrop" onClick={() => setLightbox(null)}>
+          <div className="evidence-lightbox-modal" onClick={e => e.stopPropagation()}>
+            <div className="evidence-lightbox-header">
+              <div><strong style={{fontSize:13}}>{lightbox.title||lightbox.name}</strong><div style={{fontSize:10,color:"#64748b",marginTop:3}}>{lightbox.id} · {lightbox.inspectionId}</div></div>
+              <button className="evidence-icon-btn" onClick={() => setLightbox(null)}><X size={15}/></button>
+            </div>
+            <div className="evidence-lightbox-body">
+              {lightbox.dataUrl
+                ? <img src={lightbox.dataUrl} alt={lightbox.title} className="evidence-lightbox-img"/>
+                : <div style={{color:"#64748b",textAlign:"center"}}><FileText size={48}/><p>No preview</p></div>}
+            </div>
+            <div className="evidence-lightbox-footer">
+              <span>{lightbox.mimeType||"image/jpeg"} · {fmtSize(lightbox.size||0)}</span>
+              <span className={chipClass(lightbox.syncStatus)} style={{position:"static",boxShadow:"none"}}>{chipLabel(lightbox.syncStatus)}</span>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
 
-function SyncCenter({savedCount,sync}:any){return <><PageIntro eyebrow="RELIABILITY / SYNCHRONIZATION" title="Sync center" description="Every local operation is traceable, resumable, and safe to retry." actions={<><button className="btn secondary" onClick={()=>toast("Sync paused")}>Pause queue</button><button className="btn primary" onClick={sync}><RefreshCw size={15}/> Sync now</button></>}/><div className="sync-cards"><div className="sync-stat"><span>Pending changes</span><strong>{savedCount}</strong><small>Local operations</small></div><div className="sync-stat"><span>Pending uploads</span><strong>01</strong><small>Evidence files</small></div><div className="sync-stat"><span>Completed today</span><strong>24</strong><small>98.4% success</small></div><div className="sync-stat danger-card"><span>Failed</span><strong>00</strong><small>No retries needed</small></div></div><section className="panel queue-panel"><PanelHeader title="Operation queue" icon={<RefreshCw size={16}/>} action={<StatusChip status="UNDER REVIEW"/>}/><div className="queue-row queue-head"><span>Operation</span><span>Type</span><span>Status</span><span>Progress</span><span>Created</span><span></span></div>{[["OP-7F31-A9C2","Checklist update","PENDING","10:41"],["OP-3C20-B114","Evidence upload","SYNCING","10:43"],["OP-22A1-88EF","Audit event","COMPLETED","10:44"],["OP-912B-2F10","Conflict package","COMPLETED","10:44"]].map((x,i)=><div className="queue-row" key={x[0]}><strong className="mono">{x[0]}</strong><span>{x[1]}</span><StatusChip status={x[2] === "PENDING" ? "DRAFT" : x[2] === "COMPLETED" ? "APPROVED" : "UNDER REVIEW"}/><div className="queue-progress"><i style={{width:x[2] === "COMPLETED" ? "100%" : x[2] === "SYNCING" ? "64%" : "12%"}}></i></div><span>{x[3]}</span><MoreHorizontal size={16}/></div>)}</section></>}
-function Conflicts({resolved,setResolved}:any){return <><PageIntro eyebrow="TRACEABILITY / CONFLICT CENTER" title="Conflict resolution" description="Competing offline edits are surfaced for an explicit, auditable decision." actions={!resolved&&<span className="risk-chip"><AlertTriangle size={14}/> 1 critical conflict</span>}/>{resolved?<div className="resolved-banner panel"><div className="resolved-icon"><Check size={21}/></div><div><div className="eyebrow">CONFLICT RESOLVED</div><h3>CON-2026-00001 · Final value 80 °C</h3><p>Resolved by Arun Kumar · 22 Sep 2026, 11:02 · Reason recorded in audit trail.</p></div><StatusChip status="APPROVED"/></div>:<div className="conflict-layout"><section className="panel conflict-panel"><div className="conflict-top"><div><div className="eyebrow">CONFLICT DETECTED · CON-2026-00001</div><h3>Oil temperature has competing offline values</h3><p>Inspection INS-2026-TN-0001 · Checklist item 02 · Detected at 10:44</p></div><span className="critical-chip">CRITICAL RISK</span></div><div className="version-grid"><div className="version-card"><div className="version-head"><span>VERSION A</span><small>Officer A · DEV-0001</small></div><strong>78 °C</strong><p>Captured at 10:41 · Chennai North</p><button className="btn secondary" onClick={()=>setResolved(true)}>Accept Version A</button></div><div className="versus">VS</div><div className="version-card alt"><div className="version-head"><span>VERSION B</span><small>Officer B · DEV-0018</small></div><strong>83 °C</strong><p>Captured at 10:43 · Chennai North</p><button className="btn secondary" onClick={()=>setResolved(true)}>Accept Version B</button></div></div><div className="resolution-footer"><div><LockKeyhole size={15}/><span>A resolution reason is required and will be appended to the audit trail.</span></div><button className="btn primary" onClick={()=>setResolved(true)}><CheckCircle2 size={15}/> Resolve with final value</button></div></section><aside className="panel conflict-context"><PanelHeader title="Conflict context" icon={<AlertTriangle size={16}/>} />{[["Field","Oil temperature"],["Machine","TRF-102"],["Users","Arun Kumar · Priya S."],["Devices","DEV-0001 · DEV-0018"],["State","Unresolved"],["Sync batch","BATCH-09-22-1044"]].map(x=><div className="context-row" key={x[0]}><span>{x[0]}</span><strong>{x[1]}</strong></div>)}</aside></div>}</>}
-function HistoryPage(){return <><PageIntro eyebrow="TRACEABILITY / TIME MACHINE" title="Inspection history" description="A chronological record of every meaningful state change." actions={<button className="btn secondary"><Download size={15}/> Export history</button>}/><section className="panel history-panel"><div className="history-head"><div><strong>INS-2026-TN-0001</strong><span>TRF-102 · Substation A</span></div><StatusChip status="UNDER REVIEW"/></div><div className="history-timeline">{[["10:00","Inspection created","Arun Kumar","Draft created from assignment","blue"],["10:41","Temperature updated","Arun Kumar · DEV-0001","72 °C → 78 °C","amber"],["10:43","Temperature updated","Priya S. · DEV-0018","72 °C → 83 °C","purple"],["10:44","Conflict detected","Sync engine","Competing values require resolution","red"],["11:02","Supervisor resolved","Meera Nair","Final value: 80 °C","green"]].map(x=><div className="history-event" key={x[0]}><time>{x[0]}</time><div className={"history-marker " + x[4]}></div><div><strong>{x[1]}</strong><span>{x[2]}</span><p>{x[3]}</p></div><ChevronRight size={16}/></div>)}</div></section></>}
+function SyncCenter({
+  queueItems,
+  pendingCount,
+  sync,
+  syncSingleItem,
+  enqueueTestOperation,
+  clearCompleted,
+  resetDefaultQueue,
+  isSyncing,
+  offline
+}: any) {
+  const [expandedPayloads, setExpandedPayloads] = useState<Record<string, boolean>>({});
+  const togglePayload = (id: string) => {
+    setExpandedPayloads(prev => ({ ...prev, [id]: !prev[id] }));
+  };
+
+  const items = Array.isArray(queueItems) ? queueItems : [];
+  const syncedItems = items.filter(x => x.status === "SYNCED");
+  const failedItems = items.filter(x => x.status === "FAILED");
+
+  return (
+    <>
+      <PageIntro
+        eyebrow="RELIABILITY / PERSISTENT INDEXEDDB QUEUE"
+        title="Sync center"
+        description="Every local operation is persisted in IndexedDB, traceable, and synced sequentially."
+        actions={
+          <>
+            <button className="btn secondary" onClick={enqueueTestOperation} title="Add real operation to IndexedDB queue">
+              <Upload size={14} /> Enqueue inspection
+            </button>
+            <button
+              className="btn primary"
+              onClick={sync}
+              disabled={isSyncing || offline || pendingCount === 0}
+              style={(isSyncing || offline || pendingCount === 0) ? { opacity: 0.65, cursor: "not-allowed" } : {}}
+            >
+              <RefreshCw size={15} style={isSyncing ? { animation: "spin 1s linear infinite" } : {}} />
+              {isSyncing ? "Syncing queue…" : `Sync now (${pendingCount})`}
+            </button>
+          </>
+        }
+      />
+
+      {offline && (
+        <div style={{ background: "#fff7ed", border: "1px solid #f59e0b", borderRadius: 10, padding: "12px 18px", display: "flex", gap: 10, alignItems: "center", marginBottom: 16 }}>
+          <CloudOff size={16} color="#d97706" />
+          <span style={{ fontSize: 13, color: "#92400e" }}>
+            <strong>Device is offline.</strong> Operations remain safely stored in IndexedDB (Dexie). Sync will resume automatically when connection is restored.
+          </span>
+        </div>
+      )}
+
+      <div className="sync-cards">
+        <div className={pendingCount > 0 ? "sync-stat danger-card" : "sync-stat"}>
+          <span>Pending sync</span>
+          <strong>{pendingCount < 10 ? `0${pendingCount}` : pendingCount}</strong>
+          <small>{pendingCount === 0 ? "All caught up" : "Queued in IndexedDB"}</small>
+        </div>
+        <div className="sync-stat">
+          <span>Total in queue</span>
+          <strong>{items.length < 10 ? `0${items.length}` : items.length}</strong>
+          <small>IndexedDB operations</small>
+        </div>
+        <div className="sync-stat">
+          <span>Synced today</span>
+          <strong>{syncedItems.length < 10 ? `0${syncedItems.length}` : syncedItems.length}</strong>
+          <small>Cloud verified</small>
+        </div>
+        <div className={failedItems.length > 0 ? "sync-stat danger-card" : "sync-stat"}>
+          <span>Failed retries</span>
+          <strong>{failedItems.length < 10 ? `0${failedItems.length}` : failedItems.length}</strong>
+          <small>{failedItems.length > 0 ? "Needs retry" : "Healthy queue"}</small>
+        </div>
+      </div>
+
+      {/* ── Visual Sync Queue Tree ── */}
+      <div className="sync-tree-card">
+        <div className="sync-tree-header">
+          <div className="sync-tree-title">
+            <RefreshCw size={17} style={isSyncing ? { animation: "spin 1s linear infinite" } : {}} color="#0284c7" />
+            <h3>Persistent Sync Queue</h3>
+            <span className="tree-meta-pill" style={{ background: "#e0f2fe", color: "#0369a1", fontWeight: 700 }}>
+              {pendingCount} PENDING
+            </span>
+          </div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <button className="btn secondary" onClick={resetDefaultQueue} title="Reset demo operations (Inspection A, B, C)">
+              <History size={14} /> Reset Demo Queue
+            </button>
+            {syncedItems.length > 0 && (
+              <button className="btn secondary" onClick={clearCompleted} title="Remove synced items from IndexedDB">
+                <Trash2 size={14} /> Clear Synced
+              </button>
+            )}
+          </div>
+        </div>
+
+        <div className="sync-tree-container">
+          <div className="sync-tree-root">
+            <div className="sync-tree-root-dot"></div>
+            <span>Sync Queue</span>
+            <span style={{ fontSize: 11, color: "#64748b", fontWeight: 400 }}>
+              (Dexie IndexedDB: Off2FieldDB · {items.length} operations stored)
+            </span>
+          </div>
+
+          {items.length === 0 ? (
+            <div style={{ padding: "32px", textAlign: "center", color: "var(--muted)", display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
+              <CheckCircle2 size={32} color="#10b981" />
+              <strong style={{ color: "var(--ink)", fontSize: 14 }}>Queue is empty</strong>
+              <p style={{ fontSize: 12, margin: 0 }}>All operations are synced. No pending operations stored in IndexedDB.</p>
+              <button className="btn primary" onClick={resetDefaultQueue} style={{ marginTop: 8 }}>
+                Seed Default Queue (Inspection A, B, C)
+              </button>
+            </div>
+          ) : (
+            items.map((item: any, index: number) => {
+              const isLast = index === items.length - 1;
+              const connectorSymbol = isLast ? "└──" : "├──";
+              const isExpanded = !!expandedPayloads[item.id];
+
+              return (
+                <div key={item.id} className={`sync-tree-branch ${item.status === "SYNCING" ? "is-syncing" : ""}`}>
+                  <div className="sync-tree-row">
+                    <span className="tree-connector">{connectorSymbol}</span>
+                    <div className="tree-node-content">
+                      <div className="tree-node-left">
+                        <span className="tree-entity-name">{item.entityName}</span>
+                        <span className="tree-arrow">→</span>
+                        <span className={`tree-status-badge ${item.status.toLowerCase()}`}>
+                          {item.status === "SYNCING" && <RefreshCw size={11} style={{ animation: "spin 1s linear infinite" }} />}
+                          {item.status === "SYNCED" && <Check size={11} />}
+                          {item.status === "FAILED" && <AlertTriangle size={11} />}
+                          {item.status === "PENDING" && <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#f59e0b" }}></span>}
+                          {item.status}
+                        </span>
+                        <span className="tree-meta-pill">{item.machine || "General"}</span>
+                        <span className="tree-op-title">{item.title}</span>
+                      </div>
+
+                      <div className="tree-node-actions">
+                        <span className="tree-time">
+                          {item.updatedAt ? new Date(item.updatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "—"}
+                        </span>
+                        <button
+                          className="tree-action-btn"
+                          onClick={() => togglePayload(item.id)}
+                          title="Inspect locally stored Dexie payload"
+                        >
+                          {isExpanded ? <EyeOff size={12} /> : <Eye size={12} />}
+                          {isExpanded ? "Hide" : "Payload"}
+                        </button>
+                        {(item.status === "PENDING" || item.status === "FAILED") && (
+                          <button
+                            className="tree-action-btn"
+                            onClick={() => syncSingleItem(item.id)}
+                            disabled={item.status === "SYNCING" || offline}
+                            style={{ color: "#0284c7" }}
+                            title="Sync this operation to cloud"
+                          >
+                            <RefreshCw size={12} /> Sync
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  {isExpanded && (
+                    <div className="payload-accordion">
+                      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6, color: "#94a3b8", fontSize: 10 }}>
+                        <span>IndexedDB Record: {item.id}</span>
+                        <span>Operation: {item.operationType}</span>
+                      </div>
+                      <pre className="payload-code">{JSON.stringify(item.payload, null, 2)}</pre>
+                      {item.lastError && (
+                        <div style={{ marginTop: 6, color: "#f87171", fontSize: 10 }}>
+                          <strong>Last Error:</strong> {item.lastError} (Retries: {item.retryCount})
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })
+          )}
+        </div>
+      </div>
+
+      {/* ── Persistent Queue Details Panel ── */}
+      <section className="panel queue-panel">
+        <PanelHeader title={`IndexedDB Queue Register (${items.length} records)`} icon={<History size={16}/>} action={<StatusChip status={pendingCount > 0 ? "DRAFT" : "APPROVED"}/>}/>
+        <div className="queue-row queue-head"><span>Operation ID</span><span>Entity</span><span>Type</span><span>Status</span><span>Timestamp</span><span></span></div>
+        {items.map((r: any) => (
+          <div className="queue-row" key={r.id}>
+            <strong className="mono">{r.id}</strong>
+            <span>{r.entityName} ({r.entityId})</span>
+            <span style={{ fontSize: 10, color: "#475569" }}>{r.operationType}</span>
+            <span className={`tree-status-badge ${r.status.toLowerCase()}`} style={{ padding: "2px 8px", fontSize: 10 }}>{r.status}</span>
+            <span>{r.updatedAt ? new Date(r.updatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "—"}</span>
+            <button className="tree-action-btn" onClick={() => togglePayload(r.id)} style={{ padding: "2px 6px" }}>
+              <Eye size={12}/>
+            </button>
+          </div>
+        ))}
+      </section>
+    </>
+  );
+}
+function Conflicts({resolved,setResolved}:any){return <><PageIntro eyebrow="TRACEABILITY / CONFLICT CENTER" title="Conflict resolution" description="Competing offline edits are surfaced for an explicit, auditable decision." actions={!resolved&&<span className="risk-chip"><AlertTriangle size={14}/> 1 critical conflict</span>}/>{resolved?<div className="resolved-banner panel"><div className="resolved-icon"><Check size={21}/></div><div><div className="eyebrow">CONFLICT RESOLVED</div><h3>CON-2026-00001 · Final value 80 °C</h3><p>Resolved by Pragatheesh · 22 Sep 2026, 11:02 · Reason recorded in audit trail.</p></div><StatusChip status="APPROVED"/></div>:<div className="conflict-layout"><section className="panel conflict-panel"><div className="conflict-top"><div><div className="eyebrow">CONFLICT DETECTED · CON-2026-00001</div><h3>Oil temperature has competing offline values</h3><p>Inspection INS-2026-TN-0001 · Checklist item 02 · Detected at 10:44</p></div><span className="critical-chip">CRITICAL RISK</span></div><div className="version-grid"><div className="version-card"><div className="version-head"><span>VERSION A</span><small>Officer A · DEV-0001</small></div><strong>78 °C</strong><p>Captured at 10:41 · Chennai North</p><button className="btn secondary" onClick={()=>setResolved(true)}>Accept Version A</button></div><div className="versus">VS</div><div className="version-card alt"><div className="version-head"><span>VERSION B</span><small>Officer B · DEV-0018</small></div><strong>83 °C</strong><p>Captured at 10:43 · Chennai North</p><button className="btn secondary" onClick={()=>setResolved(true)}>Accept Version B</button></div></div><div className="resolution-footer"><div><LockKeyhole size={15}/><span>A resolution reason is required and will be appended to the audit trail.</span></div><button className="btn primary" onClick={()=>setResolved(true)}><CheckCircle2 size={15}/> Resolve with final value</button></div></section><aside className="panel conflict-context"><PanelHeader title="Conflict context" icon={<AlertTriangle size={16}/>} />{[["Field","Oil temperature"],["Machine","TRF-102"],["Users","Pragatheesh · Priya S."],["Devices","DEV-0001 · DEV-0018"],["State","Unresolved"],["Sync batch","BATCH-09-22-1044"]].map(x=><div className="context-row" key={x[0]}><span>{x[0]}</span><strong>{x[1]}</strong></div>)}</aside></div>}</>}
+function HistoryPage(){return <><PageIntro eyebrow="TRACEABILITY / TIME MACHINE" title="Inspection history" description="A chronological record of every meaningful state change." actions={<button className="btn secondary"><Download size={15}/> Export history</button>}/><section className="panel history-panel"><div className="history-head"><div><strong>INS-2026-TN-0001</strong><span>TRF-102 · Substation A</span></div><StatusChip status="UNDER REVIEW"/></div><div className="history-timeline">{[["10:00","Inspection created","Pragatheesh","Draft created from assignment","blue"],["10:41","Temperature updated","Pragatheesh · DEV-0001","72 °C → 78 °C","amber"],["10:43","Temperature updated","Priya S. · DEV-0018","72 °C → 83 °C","purple"],["10:44","Conflict detected","Sync engine","Competing values require resolution","red"],["11:02","Supervisor resolved","Meera Nair","Final value: 80 °C","green"]].map(x=><div className="history-event" key={x[0]}><time>{x[0]}</time><div className={"history-marker " + x[4]}></div><div><strong>{x[1]}</strong><span>{x[2]}</span><p>{x[3]}</p></div><ChevronRight size={16}/></div>)}</div></section></>}
 function Reports(){return <><PageIntro eyebrow="COMPLIANCE / REPORTING" title="Reports" description="Generate official, PDF-ready views from locally available inspection records." actions={<button className="btn primary" onClick={()=>toast.success("Report ready",{description:"PDF-ready preview generated locally."})}><FileText size={15}/> Generate report</button>}/><div className="report-grid">{[["Inspection report","A complete field inspection record","12 records","FileCheck2"],["Machine history","Equipment readings over time","4 machines","History"],["Audit report","Append-only event export","86 events","FileClock"],["Conflict report","Resolution and risk register","1 conflict","AlertTriangle"],["Evidence report","Photo metadata and integrity","20 items","Archive"],["Compliance report","Department readiness summary","Q3 2026","ShieldCheck"]].map(x=><button className="report-card panel" key={x[0]} onClick={()=>toast("Report preview opened",{description:x[0]})}><div className="report-icon"><FileText size={19}/></div><div><h3>{x[0]}</h3><p>{x[1]}</p><span>{x[2]}</span></div><ArrowRight size={16}/></button>)}</div></>}
-function Audit(){return <><PageIntro eyebrow="SECURITY / APPEND-ONLY LOG" title="Audit trail" description="Every create, edit, submit, approve, and conflict action is preserved." actions={<button className="btn secondary"><Download size={15}/> Export CSV</button>}/><section className="panel audit-panel"><div className="toolbar compact"><div className="searchbox"><Search size={16}/><input placeholder="Search operation ID, user, or action"/></div><button className="btn secondary"><Filter size={15}/> All actions</button><button className="btn secondary">Last 30 days</button></div><div className="audit-table"><div className="audit-row audit-head"><span>Timestamp</span><span>User / role</span><span>Action</span><span>Field</span><span>Operation ID</span></div>{[["22 Sep · 11:02","Meera Nair · Supervisor","Conflict resolved","Oil temperature","OP-RES-9921"],["22 Sep · 10:44","Sync engine · System","Conflict created","Oil temperature","OP-CON-7F31"],["22 Sep · 10:43","Arun Kumar · Officer","Photo added","Evidence","OP-EVD-0002"],["22 Sep · 10:41","Arun Kumar · Officer","Edit","Oil temperature","OP-7F31-A9C2"],["22 Sep · 10:00","Arun Kumar · Officer","Create","Inspection","OP-INS-0001"]].map(x=><div className="audit-row" key={x[4]}><span>{x[0]}</span><strong>{x[1]}</strong><StatusChip status={x[2] === "Conflict resolved" ? "APPROVED" : "UNDER REVIEW"}/><span>{x[3]}</span><span className="mono">{x[4]}</span></div>)}</div></section></>}
+function Audit(){return <><PageIntro eyebrow="SECURITY / APPEND-ONLY LOG" title="Audit trail" description="Every create, edit, submit, approve, and conflict action is preserved." actions={<button className="btn secondary"><Download size={15}/> Export CSV</button>}/><section className="panel audit-panel"><div className="toolbar compact"><div className="searchbox"><Search size={16}/><input placeholder="Search operation ID, user, or action"/></div><button className="btn secondary"><Filter size={15}/> All actions</button><button className="btn secondary">Last 30 days</button></div><div className="audit-table"><div className="audit-row audit-head"><span>Timestamp</span><span>User / role</span><span>Action</span><span>Field</span><span>Operation ID</span></div>{[["22 Sep · 11:02","Meera Nair · Supervisor","Conflict resolved","Oil temperature","OP-RES-9921"],["22 Sep · 10:44","Sync engine · System","Conflict created","Oil temperature","OP-CON-7F31"],["22 Sep · 10:43","Pragatheesh · Officer","Photo added","Evidence","OP-EVD-0002"],["22 Sep · 10:41","Pragatheesh · Officer","Edit","Oil temperature","OP-7F31-A9C2"],["22 Sep · 10:00","Pragatheesh · Officer","Create","Inspection","OP-INS-0001"]].map(x=><div className="audit-row" key={x[4]}><span>{x[0]}</span><strong>{x[1]}</strong><StatusChip status={x[2] === "Conflict resolved" ? "APPROVED" : "UNDER REVIEW"}/><span>{x[3]}</span><span className="mono">{x[4]}</span></div>)}</div></section></>}
 function Admin(){return <><PageIntro eyebrow="ADMINISTRATION / CONTROL PLANE" title="Admin console" description="Manage users, roles, machines, templates, devices, and schema versions." actions={<button className="btn primary" onClick={()=>toast("Admin action ready")}> <Users size={15}/> Add user</button>}/><div className="admin-grid">{[["Users & roles","18 users · 4 roles","Users"],["Machine registry","48 registered assets","Cog"],["Inspection templates","06 active templates","ClipboardCheck"],["Devices","22 managed devices","Smartphone"],["Schema versions","v1.8 current","Database"],["System settings","RBAC · security · sync","Settings2"]].map(x=><button className="admin-card panel" key={x[0]} onClick={()=>toast("Admin module opened",{description:x[0]})}><div className="admin-icon"><Settings2 size={18}/></div><div><h3>{x[0]}</h3><p>{x[1]}</p></div><ChevronRight size={16}/></button>)}</div><section className="panel security-strip"><ShieldCheck size={20}/><div><strong>Security posture</strong><span>JWT-ready architecture · HTTPS/WSS boundary · append-only audit model · no secrets in frontend</span></div><span className="ready-chip"><span></span> Healthy</span></section></>}
