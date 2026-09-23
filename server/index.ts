@@ -7,6 +7,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 async function startServer() {
+  process.env.NODE_ENV = process.env.NODE_ENV || "production";
   const app = express();
   const server = createServer(app);
 

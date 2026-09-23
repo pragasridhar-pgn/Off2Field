@@ -5,23 +5,36 @@ export type SyncOperationType =
   | "UPDATE_INSPECTION"
   | "SUBMIT_INSPECTION"
   | "UPDATE_CHECKLIST"
+  | "CREATE_EVIDENCE"
   | "UPLOAD_EVIDENCE"
+  | "DELETE_EVIDENCE"
+  | "CREATE"
+  | "UPDATE"
+  | "DELETE"
+  | "SUBMIT"
   | "RESOLVE_CONFLICT";
 
-export type SyncItemStatus = "PENDING" | "SYNCING" | "SYNCED" | "FAILED";
+export type SyncItemStatus =
+  | "PENDING"
+  | "PROCESSING"
+  | "SYNCING"
+  | "SYNCED"
+  | "COMPLETED"
+  | "FAILED";
 
 export interface SyncQueueItem {
   id: string;
   entityId: string;
-  entityName: string;
+  entityName?: string;
+  entityType?: "INSPECTION" | "EVIDENCE";
   operationType: SyncOperationType;
-  title: string;
+  title?: string;
   machine?: string;
   site?: string;
   status: SyncItemStatus;
   retryCount: number;
   lastError?: string;
-  payload: any;
+  payload?: any;
   createdAt: string;
   updatedAt: string;
   syncedAt?: string;
@@ -44,17 +57,23 @@ export interface InspectionRecord {
 
 export interface EvidenceRecord {
   id: string;
-  inspectionId?: string;
-  name: string;
-  title: string;
-  category?: "PHOTO" | "DOCUMENT" | "REPORT";
-  mimeType: string;
-  size: number;
-  dataUrl: string;
-  syncStatus: SyncItemStatus;
-  queueItemId?: string;
+  inspectionId: string;
+  fileName: string;
+  fileType: string;
+  fileSize: number;
+  blob: Blob;
+  description: string;
+  syncStatus: "PENDING" | "SYNCED" | "FAILED";
   createdAt: string;
   updatedAt: string;
+  // Optional aliases and queue fields
+  name?: string;
+  title?: string;
+  category?: "PHOTO" | "DOCUMENT" | "REPORT";
+  mimeType?: string;
+  size?: number;
+  dataUrl?: string;
+  queueItemId?: string;
   syncedAt?: string;
 }
 

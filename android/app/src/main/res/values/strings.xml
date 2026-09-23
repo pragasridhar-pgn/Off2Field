@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">OFF2FIELD</string>
+    <string name="title_activity_main">OFF2FIELD</string>
+    <string name="package_name">com.off2field.app</string>
+    <string name="custom_url_scheme">com.off2field.app</string>
+</resources>

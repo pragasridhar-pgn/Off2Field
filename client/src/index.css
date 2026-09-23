@@ -794,5 +794,180 @@ button.stat-card-btn:hover .stat-arrow{opacity:1;color:#2a7a94}
   background: #ffffff;
 }
 
+/* ── 4. Machine Cards — Subtle Dark & Faded Visual Treatment (Prompt Requirement 4) ── */
+.machine-card-faded {
+  background: linear-gradient(145deg, #111e2e 0%, #0d1722 100%) !important;
+  border: 1px solid #1e354a !important;
+  border-radius: 10px !important;
+  position: relative;
+  overflow: hidden;
+  box-shadow: 0 4px 14px rgba(10, 20, 32, 0.25) !important;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1) !important;
+}
+.machine-card-faded:hover {
+  transform: translateY(-2px);
+  border-color: #38bdf8 !important;
+  box-shadow: 0 8px 24px rgba(56, 189, 248, 0.16), 0 0 0 1px #38bdf8 !important;
+}
+.machine-card-faded:active {
+  transform: scale(0.985);
+}
+.machine-card-overlay {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at 80% 20%, rgba(56, 189, 248, 0.08) 0%, transparent 60%);
+  pointer-events: none;
+}
+.machine-category-pill {
+  font-size: 9px;
+  font-family: 'DM Mono', monospace;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: #7dd3fc;
+  background: rgba(14, 165, 233, 0.15);
+  border: 1px solid rgba(56, 189, 248, 0.25);
+  padding: 2px 7px;
+  border-radius: 4px;
+}
+.machine-card-faded .machine-icon {
+  background: rgba(56, 189, 248, 0.12) !important;
+  color: #38bdf8 !important;
+  border: 1px solid rgba(56, 189, 248, 0.25);
+}
+
+/* ── 5. Machine Reference Section Styling (Prompt Requirement 5) ── */
+.machine-reference-wrapper {
+  background: #ffffff;
+  border: 1px solid var(--line, #e2e8f0);
+  border-radius: 10px;
+  padding: 16px 18px;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.04);
+}
+.machine-reference-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #f1f5f9;
+  margin-bottom: 14px;
+}
+.reference-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  font-family: 'DM Mono', monospace;
+  font-weight: 600;
+  color: #0284c7;
+  background: #f0f9ff;
+  border: 1px solid #bae6fd;
+  padding: 3px 8px;
+  border-radius: 4px;
+}
+.machine-reference-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 16px;
+}
+.machine-reference-card {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.reference-svg-container {
+  background: #090f1d;
+  padding: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.reference-card-body {
+  padding: 14px 16px;
+  flex: 1;
+}
+.reference-card-category {
+  font-size: 9px;
+  font-family: 'DM Mono', monospace;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: #0284c7;
+  letter-spacing: 0.8px;
+}
+.reference-card-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: #0f172a;
+  margin: 3px 0 2px;
+  font-family: 'DM Sans', sans-serif;
+}
+.reference-card-spec {
+  font-size: 11px;
+  color: #64748b;
+  margin: 0 0 10px;
+}
+.reference-points-title {
+  font-size: 10px;
+  font-weight: 700;
+  color: #334155;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 6px;
+}
+.reference-points-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.reference-points-list li {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  font-size: 11px;
+  color: #475569;
+  line-height: 1.35;
+}
+.reference-point-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #0284c7;
+  margin-top: 5px;
+  flex-shrink: 0;
+}
+
+/* ── Mobile / APK UI Size and Touch Target Improvements ── */
+@media (max-width: 768px) {
+  .btn, button.btn {
+    min-height: 42px !important;
+    font-size: 12px !important;
+  }
+  .machine-grid {
+    grid-template-columns: 1fr !important;
+    gap: 12px !important;
+  }
+  .machine-reference-grid {
+    grid-template-columns: 1fr !important;
+  }
+  .evidence-grid {
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)) !important;
+    gap: 10px !important;
+  }
+  .check-item {
+    padding: 8px 0;
+  }
+  .check-field {
+    width: 100% !important;
+    max-width: 140px;
+  }
+}
+
 
 

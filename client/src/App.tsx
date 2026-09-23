@@ -3,17 +3,16 @@ import {
   Activity, AlertTriangle, Archive, ArrowRight, BarChart3, Bell, Camera, Check, CheckCircle2, ChevronRight, ClipboardCheck, Cloud, CloudOff, Clock3, Cog, Download, Eye, EyeOff, FileBarChart, FileCheck2, FileClock, FileText, Filter, HardDrive, History, Home, Image as ImageIcon, Link2, ListChecks, LogOut, LockKeyhole, Menu, MoreHorizontal, QrCode, RefreshCw, Search, Send, Settings2, ShieldCheck, Smartphone, SlidersHorizontal, Sparkles, Table2, Trash2, Upload, Users, Wifi, X
 } from "lucide-react";
 import { Toaster, toast } from "sonner";
-import { auth, db } from "./lib/firebase";
+import { auth, db } from "./firebase/firebaseConfig";
 import {
-  signInWithEmailAndPassword,
-  createUserWithEmailAndPassword,
-  signOut,
-  onAuthStateChanged,
-  setPersistence,
-  browserLocalPersistence,
-  browserSessionPersistence,
-} from "firebase/auth";
-import { doc, setDoc, getDoc } from "firebase/firestore";
+  signUp as authSignUp,
+  signIn as authSignIn,
+  signOutUser,
+  getCurrentUser,
+  subscribeToAuthState,
+  type AppUser,
+} from "./services/authService";
+import { pullInitialCloudData } from "./services/cloudDataService";
 import {
   saveInspection,
   getInspection,
@@ -30,14 +29,29 @@ import {
   seedInitialQueueIfEmpty,
 } from "./db/syncQueueStorage";
 import {
-  saveEvidenceLocally,
+  saveEvidence,
+  getEvidence,
+  getEvidenceForInspection,
   getAllEvidence,
+  updateEvidence,
+  deleteEvidence,
+  saveEvidenceLocally,
   getEvidenceById,
   deleteEvidenceLocally,
   updateEvidenceStatus,
   seedInitialEvidenceIfEmpty,
 } from "./db/evidenceStorage";
 import type { SyncQueueItem, EvidenceRecord } from "./db/database";
+import { getOnlineStatus, subscribeNetworkStatus } from "./utils/networkStatus";
+import {
+  processSyncQueue,
+  processSingleQueueItem,
+  retryQueueItem,
+  getQueueSyncSummary,
+} from "./services/syncService";
+import { QRScannerModal } from "./components/QRScannerModal";
+import { CameraCaptureModal } from "./components/CameraCaptureModal";
+import { MachineReferenceGuides } from "./components/MachineReferenceGuides";
 
 
 type NavKey = "dashboard" | "inspections" | "workspace" | "offline-workspace" | "machines" | "scanner" | "evidence" | "sync" | "conflicts" | "history" | "reports" | "audit" | "admin";
@@ -239,7 +253,8 @@ function persist<T>(key: string, value: T) { localStorage.setItem(key, JSON.stri
 function read<T>(key: string, fallback: T): T { try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : fallback; } catch { return fallback; } }
 
 export default function App() {
-  const [role, setRole] = useState<Role | null>(null);
+  const [currentUser, setCurrentUser] = useState<AppUser | null>(() => getCurrentUser());
+  const [role, setRole] = useState<Role | null>(() => getCurrentUser()?.role || null);
   const [authReady, setAuthReady] = useState(false);
   const [page, setPage] = useState<NavKey>("dashboard");
   const [offline, setOffline] = useState(() => !navigator.onLine);
@@ -296,28 +311,63 @@ export default function App() {
   const [showSubmittedModal, setShowSubmittedModal] = useState(false);
   const [inspectionsList, setInspectionsList] = useState<any[]>(() => read("off2field-inspections", defaultInspections));
 
+  const [showQRScanner, setShowQRScanner] = useState(false);
+  const [showCameraModal, setShowCameraModal] = useState(false);
+
+  const handleQRScanSuccess = (scannedVal: string) => {
+    setShowQRScanner(false);
+    const trimmed = scannedVal.trim();
+    // Check if scanned value matches any known machine code (e.g. TRF-102, PMP-301)
+    const match = Object.keys(machineTemplates).find(
+      k => k.toLowerCase() === trimmed.toLowerCase() || trimmed.toUpperCase().includes(k)
+    );
+    const targetKey = match || (trimmed.length <= 15 ? trimmed.toUpperCase() : "TRF-102");
+
+    toast.success("QR Code Verified", {
+      description: `Asset identified: ${targetKey}. Starting inspection workspace.`,
+    });
+    startNewInspection(targetKey);
+  };
+
+  const handleCameraPhotoConfirm = async (data: { blob: Blob; fileName: string; dataUrl: string }) => {
+    setShowCameraModal(false);
+    await handleCaptureEvidence({
+      file: new File([data.blob], data.fileName, { type: data.blob.type || "image/jpeg" }),
+      dataUrl: data.dataUrl,
+      name: data.fileName,
+      title: `On-site Camera Snapshot · ${manualMachineCode || selectedMachineKey || "Field Asset"}`
+    });
+  };
+
   // ── Firebase auth state listener ──────────────────────────────
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, async (fbUser) => {
-      if (fbUser) {
-        try {
-          const snap = await getDoc(doc(db, "users", fbUser.uid));
-          if (snap.exists()) {
-            const r = snap.data().role as Role;
-            setRole(r);
-            setPage(r === "admin" ? "reports" : "dashboard");
-          } else {
-            // Firestore doc missing — treat as logged out
-            await signOut(auth);
-            setRole(null);
-          }
-        } catch {
-          setRole(null);
-        }
+    const unsub = subscribeToAuthState((user, isReady) => {
+      setCurrentUser(user);
+      if (user) {
+        setRole(user.role);
       } else {
         setRole(null);
       }
-      setAuthReady(true);
+      setAuthReady(isReady);
+
+      // Auto cloud pull on login if online
+      if (user && navigator.onLine) {
+        pullInitialCloudData(user.uid).then(() => {
+          getAllInspections().then(records => {
+            if (records && records.length > 0) {
+              setInspectionsList(records.map(r => ({
+                id: r.id,
+                machine: r.machine || "TRF-102",
+                site: r.site || "Field Site",
+                status: (r.status as Status) || "DRAFT",
+                priority: "HIGH",
+                date: "Today",
+                completion: (r.status === "SUBMITTED" || r.status === "APPROVED" || r.status === "PENDING") ? "100%" : "68%",
+              })));
+            }
+          });
+        }).catch(err => console.warn("Initial cloud sync note:", err));
+      }
     });
     return unsub;
   }, []);
@@ -389,23 +439,21 @@ export default function App() {
 
   // ── Native browser offline & online detection ─────────────────
   useEffect(() => {
-    const handleOnline = () => {
-      setOffline(false);
-      toast.success("Network connection restored", { description: "Syncing pending inspections…" });
-      // auto-trigger sync when connection is restored
-      syncPendingRecords();
-    };
-    const handleOffline = () => {
-      setOffline(true);
-      setPage("offline-workspace");
-      toast.error("Device is Offline", { description: "Switched to Offline Field Workspace." });
-    };
-    window.addEventListener("online", handleOnline);
-    window.addEventListener("offline", handleOffline);
-    return () => {
-      window.removeEventListener("online", handleOnline);
-      window.removeEventListener("offline", handleOffline);
-    };
+    const unsubscribe = subscribeNetworkStatus((online) => {
+      setOffline(!online);
+      if (online) {
+        toast.success("Network connection restored", {
+          description: "Online state detected. Ready for queue sync.",
+        });
+        syncPendingRecords();
+      } else {
+        setPage("offline-workspace");
+        toast.info("Device is Offline", {
+          description: "Switched to Offline Field Workspace. All records stored locally in IndexedDB.",
+        });
+      }
+    });
+    return unsubscribe;
   }, []);
 
   // ── Load pending records whenever savedCount changes ───────────
@@ -429,138 +477,95 @@ export default function App() {
       const next = !v;
       if (next) {
         setPage("offline-workspace");
-        toast.info("Offline mode enabled", { description: "Switched to Offline Field Workspace. Work is stored locally." });
+        toast.info("Offline mode enabled", { description: "Switched to Offline Field Workspace. Work is stored locally in IndexedDB." });
       } else {
         toast.success("Connection restored", { description: "Ready to sync." });
       }
       return next;
     });
   };
+
   const saveEdit = async (i: number, value: string) => {
     const updated = checklist.map((item, idx) => (idx === i ? { ...item, value } : item));
     setChecklist(updated);
     const itemLabel = checklist[i]?.label || `Item ${i + 1}`;
-    updateInspection(activeInspectionId, {
+    await updateInspection(activeInspectionId, {
       checklist: updated,
       syncStatus: "PENDING",
       updatedAt: new Date().toISOString(),
-    }).catch(err => console.error("Failed to update checklist in IndexedDB:", err));
-
-    await enqueueSyncItem({
-      entityId: activeInspectionId,
-      entityName: activeInspectionId === "INS-2026-TN-0001" ? "Inspection A" :
-                 activeInspectionId === "INS-2026-TN-0002" ? "Inspection B" :
-                 activeInspectionId === "INS-2026-TN-0003" ? "Inspection C" : activeInspectionId,
-      operationType: "UPDATE_CHECKLIST",
-      title: `${itemLabel} → ${value}`,
-      machine: manualMachineCode || selectedMachineKey,
-      site: machineTemplates[selectedMachineKey]?.location.split("·")[0].trim() || "Field Site",
-      status: "PENDING",
-      payload: {
-        inspectionId: activeInspectionId,
-        field: itemLabel,
-        value,
-        updatedAt: new Date().toISOString(),
-      },
     });
+
+    // Check if there is already a pending checklist update in the queue for this inspection
+    const existingQueueItems = await getPendingQueueItems();
+    const existingChecklistOp = existingQueueItems.find(
+      q => q.entityId === activeInspectionId && q.operationType === "UPDATE_CHECKLIST" && q.status === "PENDING"
+    );
+
+    if (existingChecklistOp) {
+      await updateQueueItem(existingChecklistOp.id, {
+        title: `${itemLabel} → ${value}`,
+        payload: {
+          inspectionId: activeInspectionId,
+          field: itemLabel,
+          value,
+          checklist: updated,
+          updatedAt: new Date().toISOString(),
+        },
+        updatedAt: new Date().toISOString(),
+      });
+    } else {
+      await enqueueSyncItem({
+        entityId: activeInspectionId,
+        entityName: activeInspectionId === "INS-2026-TN-0001" ? "Inspection A" :
+                   activeInspectionId === "INS-2026-TN-0002" ? "Inspection B" :
+                   activeInspectionId === "INS-2026-TN-0003" ? "Inspection C" : activeInspectionId,
+        operationType: "UPDATE_CHECKLIST",
+        title: `${itemLabel} → ${value}`,
+        machine: manualMachineCode || selectedMachineKey,
+        site: machineTemplates[selectedMachineKey]?.location.split("·")[0].trim() || "Field Site",
+        status: "PENDING",
+        payload: {
+          inspectionId: activeInspectionId,
+          field: itemLabel,
+          value,
+          checklist: updated,
+          updatedAt: new Date().toISOString(),
+        },
+      });
+    }
     await refreshQueue();
   };
 
-  // ── Real sync: sequentially process real PENDING items from IndexedDB ──
+  // ── Phase 2 Sync Queue Processor (Firebase Firestore + Storage) ──
   const syncPendingRecords = async () => {
     if (isSyncing) return;
     setIsSyncing(true);
     try {
-      const items = await getPendingQueueItems();
-      if (items.length === 0) {
-        toast("Nothing to sync", { description: "All local operations are already synchronized." });
-        setIsSyncing(false);
-        return;
-      }
-      let synced = 0;
-      let failed = 0;
+      const result = await processSyncQueue();
 
-      for (const item of items) {
-        // Mark as SYNCING in IndexedDB & state
-        await updateQueueItem(item.id, { status: "SYNCING" });
-        setQueueItems(prev => prev.map(q => q.id === item.id ? { ...q, status: "SYNCING" } : q));
-
-        // Observable sequential delay for realistic queue progress
-        await new Promise(r => setTimeout(r, 400));
-
-        try {
-          if (offline) {
-            throw new Error("Device is offline. Queued locally in IndexedDB.");
-          }
-          // Real cloud sync: write to Firestore
-          await setDoc(
-            doc(db as any, "inspections", item.entityId),
-            {
-              id: item.entityId,
-              machine: item.machine,
-              site: item.site,
-              ...(item.payload || {}),
-              syncStatus: "SYNCED",
-              syncedAt: new Date().toISOString(),
-            },
-            { merge: true }
-          );
-          // Mark SYNCED in IndexedDB
-          await updateQueueItem(item.id, {
-            status: "SYNCED",
-            syncedAt: new Date().toISOString(),
-            lastError: undefined,
-          });
-          if (item.operationType === "UPLOAD_EVIDENCE") {
-            await updateEvidenceStatus(item.entityId, "SYNCED", new Date().toISOString());
-          } else {
-            await updateInspection(item.entityId, {
-              syncStatus: "SYNCED",
-              updatedAt: new Date().toISOString(),
-            });
-          }
-          synced++;
-        } catch (err: any) {
-          await updateQueueItem(item.id, {
-            status: "FAILED",
-            lastError: err?.message || "Sync failed",
-            retryCount: (item.retryCount || 0) + 1,
-          });
-          failed++;
-        }
+      if (!offline && currentUser?.uid) {
+        await pullInitialCloudData(currentUser.uid);
       }
 
-      // Refresh real queue state from IndexedDB
       await refreshQueue();
       const refreshedEvs = await getAllEvidence();
       setEvidenceList(refreshedEvs);
 
-      // Refresh inspections list statuses after sync
       const refreshed = await getAllInspections();
       setPendingRecords(refreshed.filter(r => r.syncStatus === "PENDING"));
-      setInspectionsList(prev => {
-        const map = new Map(prev.map(x => [x.id, x]));
-        for (const r of refreshed) {
-          const prevItem = map.get(r.id);
-          if (prevItem && r.syncStatus === "SYNCED") {
-            map.set(r.id, { ...prevItem, status: r.status });
-          }
-        }
-        return Array.from(map.values());
-      });
 
-      if (failed === 0) {
-        toast.success(`Sync complete — ${synced} operation${synced !== 1 ? "s" : ""} uploaded`, {
-          description: "All local changes are now synchronized with the cloud."
+      if (offline) {
+        toast.info("Offline Queue Protected", {
+          description: "Device is offline. All records remain safely stored in IndexedDB.",
         });
       } else {
-        toast.warning(`Partial sync — ${synced} uploaded, ${failed} failed`, {
-          description: "Failed records remain safely stored in IndexedDB for retry."
+        toast.success("Firebase Cloud Sync Complete", {
+          description: result.message,
         });
       }
-    } catch (err) {
-      console.error("Sync error:", err);
-      toast.error("Sync failed", { description: "Could not reach the server. Will retry when online." });
+    } catch (err: any) {
+      console.error("Queue process error:", err);
+      toast.error("Queue Processing Error", { description: err?.message || "Check local IndexedDB state." });
     } finally {
       setIsSyncing(false);
     }
@@ -569,44 +574,23 @@ export default function App() {
   const syncSingleItem = async (itemId: string) => {
     const item = queueItems.find(q => q.id === itemId);
     if (!item) return;
-    await updateQueueItem(itemId, { status: "SYNCING" });
-    setQueueItems(prev => prev.map(q => q.id === itemId ? { ...q, status: "SYNCING" } : q));
-    await new Promise(r => setTimeout(r, 350));
+
+    await updateQueueItem(itemId, { status: "PROCESSING" });
+    setQueueItems(prev => prev.map(q => q.id === itemId ? { ...q, status: "PROCESSING" } : q));
+    await new Promise(r => setTimeout(r, 250));
+
     try {
-      if (offline) throw new Error("Device is offline");
-      await setDoc(
-        doc(db as any, "inspections", item.entityId),
-        {
-          id: item.entityId,
-          machine: item.machine,
-          site: item.site,
-          ...(item.payload || {}),
-          syncStatus: "SYNCED",
-          syncedAt: new Date().toISOString(),
-        },
-        { merge: true }
-      );
-      await updateQueueItem(itemId, {
-        status: "SYNCED",
-        syncedAt: new Date().toISOString(),
-        lastError: undefined,
-      });
-      if (item.operationType === "UPLOAD_EVIDENCE") {
-        await updateEvidenceStatus(item.entityId, "SYNCED", new Date().toISOString());
-      } else {
-        await updateInspection(item.entityId, {
-          syncStatus: "SYNCED",
-          updatedAt: new Date().toISOString(),
-        });
+      if (item.status === "FAILED") {
+        await retryQueueItem(itemId);
       }
-      toast.success(`${item.entityName} synced to cloud!`);
+      const res = await processSingleQueueItem(itemId);
+      if (res.success) {
+        toast.success(`${item.entityName || item.id} verified in local queue`);
+      } else {
+        toast.warning(`${item.entityName || item.id}: ${res.error || "Pending cloud adapter"}`);
+      }
     } catch (err: any) {
-      await updateQueueItem(itemId, {
-        status: "FAILED",
-        lastError: err?.message || "Sync failed",
-        retryCount: (item.retryCount || 0) + 1,
-      });
-      toast.error(`Sync failed for ${item.entityName}`, { description: err?.message });
+      toast.error(`Queue error for ${item.entityName || item.id}`, { description: err?.message });
     }
     await refreshQueue();
     const refreshedEvs = await getAllEvidence();
@@ -727,30 +711,52 @@ export default function App() {
         checklist: initialChecklist,
         createdAt: now,
       },
-    }).then(() => refreshQueue()).catch(err => console.error("Failed to enqueue in IndexedDB:", err));
+    }).then(async () => {
+      await refreshQueue();
+      if (!offline && currentUser && !currentUser.isOfflineUser) {
+        syncPendingRecords();
+      }
+    }).catch(err => console.error("Failed to enqueue in IndexedDB:", err));
 
     go("workspace");
   };
 
   const handleCaptureEvidence = async (fileOrDataUrl?: { file?: File; dataUrl?: string; name?: string; title?: string }) => {
-    let dataUrl = fileOrDataUrl?.dataUrl;
-    let name = fileOrDataUrl?.name || "captured_photo.jpg";
-    let title = fileOrDataUrl?.title || "Field Equipment Photo";
-    let size = 32000;
-    let mimeType = "image/jpeg";
+    const id = `EVD-2026-${Math.floor(10000 + Math.random() * 90000)}`;
+    const inspectionId = activeInspectionId || "INS-2026-TN-0001";
+    const now = new Date().toISOString();
+
+    let blob: Blob;
+    let fileName = fileOrDataUrl?.name || "captured_photo.jpg";
+    let fileType = "image/jpeg";
+    let fileSize = 32000;
+    let description = fileOrDataUrl?.title || `Field Inspection Photo · ${selectedMachineKey || "TRF-102"}`;
 
     if (fileOrDataUrl?.file) {
-      name = fileOrDataUrl.file.name;
-      title = name.replace(/\.[^/.]+$/, "");
-      size = fileOrDataUrl.file.size;
-      mimeType = fileOrDataUrl.file.type || "image/jpeg";
-      dataUrl = await new Promise<string>((resolve) => {
-        const reader = new FileReader();
-        reader.onload = (e) => resolve(e.target?.result as string);
-        reader.readAsDataURL(fileOrDataUrl.file!);
-      });
-    } else if (!dataUrl) {
-      // Create simulated snapshot dataUrl if none provided
+      const file = fileOrDataUrl.file;
+      blob = file;
+      fileName = file.name;
+      fileType = file.type || "image/jpeg";
+      fileSize = file.size;
+      description = file.name.replace(/\.[^/.]+$/, "");
+    } else if (fileOrDataUrl?.dataUrl) {
+      try {
+        const parts = fileOrDataUrl.dataUrl.split(",");
+        const mimeMatch = parts[0].match(/:(.*?);/);
+        fileType = mimeMatch ? mimeMatch[1] : "image/jpeg";
+        const bstr = atob(parts[1]);
+        let n = bstr.length;
+        const u8arr = new Uint8Array(n);
+        while (n--) {
+          u8arr[n] = bstr.charCodeAt(n);
+        }
+        blob = new Blob([u8arr], { type: fileType });
+        fileSize = blob.size;
+      } catch {
+        blob = new Blob([fileOrDataUrl.dataUrl], { type: "image/jpeg" });
+      }
+    } else {
+      // Offline simulated photo snapshot fallback
       const timeStr = new Date().toLocaleTimeString();
       const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="400" height="300" viewBox="0 0 400 300">
         <rect width="400" height="300" fill="#1e293b"/>
@@ -759,20 +765,28 @@ export default function App() {
         <text x="200" y="210" fill="#ffffff" font-size="16" font-family="system-ui" font-weight="600" text-anchor="middle">Field Photo Snapshot</text>
         <text x="200" y="235" fill="#94a3b8" font-size="12" font-family="monospace" text-anchor="middle">${timeStr} · IndexedDB</text>
       </svg>`;
-      dataUrl = `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
-      name = `photo_${Date.now().toString().slice(-4)}.jpg`;
-      title = `Field Inspection Photo · ${selectedMachineKey || "TRF-102"}`;
+      blob = new Blob([svg], { type: "image/svg+xml" });
+      fileType = "image/svg+xml";
+      fileSize = blob.size;
+      fileName = `photo_${Date.now().toString().slice(-4)}.jpg`;
+      description = `Field Inspection Photo · ${selectedMachineKey || "TRF-102"}`;
     }
 
     try {
       const record = await saveEvidenceLocally({
-        inspectionId: activeInspectionId || "INS-2026-TN-0001",
-        name,
-        title,
-        mimeType,
-        size,
-        dataUrl,
+        id,
+        inspectionId,
+        fileName,
+        fileType,
+        fileSize,
+        blob,
+        description,
         syncStatus: "PENDING",
+        name: fileName,
+        title: description,
+        category: "PHOTO",
+        mimeType: fileType,
+        size: fileSize,
       });
 
       await refreshQueue();
@@ -780,8 +794,13 @@ export default function App() {
       setEvidenceList(refreshedEvs);
 
       toast.success("Evidence saved locally to IndexedDB", {
-        description: `${record.id} (${title}) enqueued to PENDING sync queue.`
+        description: `${record.id} (${description}) stored offline.`
       });
+
+      // If online and authenticated with Firebase, immediately process sync queue
+      if (!offline && currentUser && !currentUser.isOfflineUser) {
+        syncPendingRecords();
+      }
     } catch (err: any) {
       console.error("Failed to save evidence:", err);
       toast.error("Failed to store evidence locally", { description: err?.message });
@@ -844,6 +863,11 @@ export default function App() {
           },
         });
         await refreshQueue();
+
+        // If online and authenticated with Firebase, immediately process sync queue
+        if (!offline && currentUser && !currentUser.isOfflineUser) {
+          syncPendingRecords();
+        }
       }
     } catch (err) {
       console.error("Failed to update status in IndexedDB:", err);
@@ -874,14 +898,23 @@ export default function App() {
   const handleInspectionSubmit = () => {
     transitionLifecycle("SUBMITTED");
   };
-  const logout = async () => { try { await signOut(auth); } catch { /**/ } setRole(null); setPage("dashboard"); };
+
+  const logout = async () => {
+    try {
+      await signOutUser();
+    } catch { /**/ }
+    setCurrentUser(null);
+    setRole(null);
+    setPage("dashboard");
+  };
 
   // Show a minimal loading screen while Firebase resolves auth state
   if (!authReady) return <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"var(--paper)"}}><Brand/></div>;
 
-  if (!role) return <LoginPage onLogin={async (r, remember) => {
-    setRole(r);
-    setPage(r === "admin" ? "reports" : "dashboard");
+  if (!role) return <LoginPage onLogin={async (userObj) => {
+    setCurrentUser(userObj);
+    setRole(userObj.role);
+    setPage(userObj.role === "admin" ? "reports" : "dashboard");
   }} />;
 
   const inspectorNav = nav.slice(0, 9);
@@ -904,9 +937,18 @@ export default function App() {
           </button>
         </div>
       )}
-      <div className="sidebar-bottom"><div className="profile"><div className="avatar">{role === "admin" ? "AD" : "PR"}</div><div><strong>{role === "admin" ? "Admin User" : "Pragatheesh"}</strong><span>{role === "admin" ? "Administrator" : "Field Officer"}</span></div><button className="icon-btn logout-btn" title="Sign out" onClick={logout}><LogOut size={16}/></button></div></div>
+      <div className="sidebar-bottom">
+        <div className="profile">
+          <div className="avatar">{role === "admin" ? "AD" : (currentUser?.email ? currentUser.email.slice(0, 2).toUpperCase() : "PR")}</div>
+          <div>
+            <strong>{currentUser?.displayName || (role === "admin" ? "Admin User" : "Field Officer")}</strong>
+            <span>{currentUser?.email || (role === "admin" ? "Administrator" : "Offline Inspector")}</span>
+          </div>
+          <button className="icon-btn logout-btn" title="Sign out" onClick={logout}><LogOut size={16}/></button>
+        </div>
+      </div>
     </aside>
-    <main className="main"><Topbar page={page} offline={offline} isSyncing={isSyncing} toggleOffline={toggleOffline} savedCount={savedCount} sync={sync}/>
+    <main className="main"><Topbar page={page} offline={offline} isSyncing={isSyncing} toggleOffline={toggleOffline} savedCount={savedCount} sync={syncPendingRecords} userEmail={currentUser?.email || currentUser?.displayName}/>
       {offline && page !== "offline-workspace" && (
         <div style={{padding:"0 24px 0 24px",marginTop:14}}>
           <div className="offline-banner-bar">
@@ -920,9 +962,38 @@ export default function App() {
           </div>
         </div>
       )}
-      <div className="content">{page === "dashboard" && <Dashboard go={go} offline={offline} savedCount={savedCount} openInspection={openInspection}/>} {page === "inspections" && <Inspections openInspection={openInspection} startNewInspection={startNewInspection} inspectionsList={inspectionsList}/>} {page === "workspace" && <Workspace status={inspectionStatus} setStatus={setInspectionStatus} transitionLifecycle={transitionLifecycle} checklist={checklist} setChecklist={setChecklist} saveEdit={saveEdit} offline={offline} go={go} resolved={resolved} setResolved={setResolved} selectedMachineKey={selectedMachineKey} setSelectedMachineKey={setSelectedMachineKey} manualMachineCode={manualMachineCode} setManualMachineCode={setManualMachineCode} activeInspectionId={activeInspectionId} submittedAt={submittedAt} onSubmitClick={handleInspectionSubmit} savedCount={savedCount} onCaptureEvidence={handleCaptureEvidence} evidenceList={evidenceList} onDeleteEvidence={async (id: string) => { await deleteEvidenceLocally(id); const evs = await getAllEvidence(); setEvidenceList(evs); await refreshQueue(); toast("Evidence deleted from IndexedDB"); }} onSyncEvidence={async (item: any) => { if (item.queueItemId) { await syncSingleItem(item.queueItemId); } else { toast.info("Item is already synced or has no pending queue entry."); } }}/>} {page === "offline-workspace" && <OfflineWorkspace go={go} refreshQueue={refreshQueue} setInspectionsList={setInspectionsList} onSubmitted={(newId: string) => { setActiveInspectionId(newId); setInspectionStatus("SUBMITTED"); setShowSubmittedModal(true); }} />} {page === "machines" && <Machines go={go} startNewInspection={startNewInspection}/>} {page === "scanner" && <Scanner go={go} startNewInspection={startNewInspection}/>} {page === "evidence" && <Evidence evidenceList={evidenceList} savedCount={savedCount} onCaptureEvidence={handleCaptureEvidence} onDeleteEvidence={async (id: string) => { await deleteEvidenceLocally(id); const evs = await getAllEvidence(); setEvidenceList(evs); await refreshQueue(); toast("Evidence deleted from IndexedDB"); }} onSyncEvidence={async (item: any) => { if (item.queueItemId) { await syncSingleItem(item.queueItemId); } else { toast.info("Item is already synced or has no pending queue entry."); } }} offline={offline}/>} {page === "sync" && <SyncCenter queueItems={queueItems} pendingCount={savedCount} sync={sync} syncSingleItem={syncSingleItem} enqueueTestOperation={enqueueCustomOperation} clearCompleted={clearCompleted} resetDefaultQueue={resetDefaultQueue} isSyncing={isSyncing} offline={offline}/>} {page === "conflicts" && <Conflicts resolved={resolved} setResolved={setResolved}/>} {page === "history" && <HistoryPage/>} {page === "reports" && <Reports/>} {page === "audit" && <Audit/>} {page === "admin" && <Admin/>}</div>
+      <div className="content">
+        {page === "dashboard" && <Dashboard go={go} offline={offline} savedCount={savedCount} openInspection={openInspection} onOpenScanner={() => setShowQRScanner(true)}/>}
+        {page === "inspections" && <Inspections openInspection={openInspection} startNewInspection={startNewInspection} inspectionsList={inspectionsList}/>}
+        {page === "workspace" && <Workspace status={inspectionStatus} setStatus={setInspectionStatus} transitionLifecycle={transitionLifecycle} checklist={checklist} setChecklist={setChecklist} saveEdit={saveEdit} offline={offline} go={go} resolved={resolved} setResolved={setResolved} selectedMachineKey={selectedMachineKey} setSelectedMachineKey={setSelectedMachineKey} manualMachineCode={manualMachineCode} setManualMachineCode={setManualMachineCode} activeInspectionId={activeInspectionId} submittedAt={submittedAt} onSubmitClick={handleInspectionSubmit} savedCount={savedCount} onCaptureEvidence={handleCaptureEvidence} evidenceList={evidenceList} onOpenLiveCamera={() => setShowCameraModal(true)} onDeleteEvidence={async (id: string) => { await deleteEvidenceLocally(id); const evs = await getAllEvidence(); setEvidenceList(evs); await refreshQueue(); toast("Evidence deleted from IndexedDB"); }} onSyncEvidence={async (item: any) => { const matchingQ = queueItems.find(q => q.entityId === item.id || q.payload?.id === item.id); if (matchingQ) { await syncSingleItem(matchingQ.id); } else if (item.queueItemId) { await syncSingleItem(item.queueItemId); } else { await syncPendingRecords(); } }}/>}
+        {page === "offline-workspace" && <OfflineWorkspace go={go} refreshQueue={refreshQueue} setInspectionsList={setInspectionsList} onOpenLiveCamera={() => setShowCameraModal(true)} onSubmitted={(newId: string) => { setActiveInspectionId(newId); setInspectionStatus("SUBMITTED"); setShowSubmittedModal(true); }} />}
+        {page === "machines" && <Machines go={go} startNewInspection={startNewInspection} onOpenScanner={() => setShowQRScanner(true)}/>}
+        {page === "scanner" && <Scanner go={go} startNewInspection={startNewInspection} onOpenLiveScanner={() => setShowQRScanner(true)}/>}
+        {page === "evidence" && <Evidence evidenceList={evidenceList} savedCount={savedCount} onCaptureEvidence={handleCaptureEvidence} onOpenLiveCamera={() => setShowCameraModal(true)} onDeleteEvidence={async (id: string) => { await deleteEvidenceLocally(id); const evs = await getAllEvidence(); setEvidenceList(evs); await refreshQueue(); toast("Evidence deleted from IndexedDB"); }} onSyncEvidence={async (item: any) => { const matchingQ = queueItems.find(q => q.entityId === item.id || q.payload?.id === item.id); if (matchingQ) { await syncSingleItem(matchingQ.id); } else if (item.queueItemId) { await syncSingleItem(item.queueItemId); } else { await syncPendingRecords(); } }} offline={offline}/>}
+        {page === "sync" && <SyncCenter queueItems={queueItems} pendingCount={savedCount} sync={sync} syncSingleItem={syncSingleItem} enqueueTestOperation={enqueueCustomOperation} clearCompleted={clearCompleted} resetDefaultQueue={resetDefaultQueue} isSyncing={isSyncing} offline={offline}/>}
+        {page === "conflicts" && <Conflicts resolved={resolved} setResolved={setResolved}/>}
+        {page === "history" && <HistoryPage/>}
+        {page === "reports" && <Reports/>}
+        {page === "audit" && <Audit/>}
+        {page === "admin" && <Admin/>}
+      </div>
     </main>
     <div className="mobile-nav">{mobileNavItems.map(item => <button className={page === item.key ? "active" : ""} key={item.key} onClick={() => go(item.key as NavKey)}><item.icon size={18}/><span>{item.label.split(" ")[0]}</span></button>)}</div>
+
+    {/* ── Real QR Scanner Camera Modal ── */}
+    <QRScannerModal
+      isOpen={showQRScanner}
+      onClose={() => setShowQRScanner(false)}
+      onScanSuccess={handleQRScanSuccess}
+    />
+
+    {/* ── Real Camera Photo Capture Modal ── */}
+    <CameraCaptureModal
+      isOpen={showCameraModal}
+      onClose={() => setShowCameraModal(false)}
+      onCapture={handleCameraPhotoConfirm}
+      machineTitle={manualMachineCode || selectedMachineKey}
+    />
 
     {/* ── Inspection Submitted Modal Popup ── */}
     {showSubmittedModal && (
@@ -966,13 +1037,14 @@ export default function App() {
 }
 
 
-function LoginPage({ onLogin }: { onLogin: (role: Role, remember: boolean) => void }) {
+function LoginPage({ onLogin }: { onLogin: (user: AppUser) => void }) {
+  const [isSignUp, setIsSignUp] = useState(false);
   const [user, setUser] = useState("");
   const [pass, setPass] = useState("");
+  const [roleSelect, setRoleSelect] = useState<Role>("inspector");
   const [showPass, setShowPass] = useState(false);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
-  const [rememberDevice, setRememberDevice] = useState(false);
 
   const submit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -980,58 +1052,114 @@ function LoginPage({ onLogin }: { onLogin: (role: Role, remember: boolean) => vo
     setLoading(true);
     const email = user.trim().includes("@") ? user.trim() : `${user.trim()}@off2field.com`;
     try {
-      await setPersistence(auth, rememberDevice ? browserLocalPersistence : browserSessionPersistence);
-      let credential;
-      try {
-        credential = await signInWithEmailAndPassword(auth, email, pass);
-      } catch (signInErr: any) {
-        if (signInErr.code === "auth/user-not-found" || signInErr.code === "auth/invalid-credential") {
-          credential = await createUserWithEmailAndPassword(auth, email, pass);
-        } else throw signInErr;
+      let appUser: AppUser;
+      if (isSignUp) {
+        appUser = await authSignUp(email, pass, roleSelect);
+        toast.success("Account created successfully", { description: `Logged in as ${email}` });
+      } else {
+        appUser = await authSignIn(email, pass);
+        toast.success("Signed in successfully", { description: `Welcome back, ${email}` });
       }
-      
-      let r: Role = user.toLowerCase().includes("admin") ? "admin" : "inspector";
-      try {
-        const snap = await getDoc(doc(db, "users", credential.user.uid));
-        if (snap.exists() && snap.data().role) {
-          r = snap.data().role as Role;
-        } else {
-          await setDoc(doc(db, "users", credential.user.uid), { role: r, email }, { merge: true });
-        }
-      } catch {
-        // Fallback
-      }
-      onLogin(r, rememberDevice);
+      onLogin(appUser);
     } catch (e: any) {
       const code: string = e.code ?? "";
       if (code === "auth/wrong-password" || code === "auth/invalid-credential") setErr("Incorrect password. Please try again.");
-      else if (code === "auth/invalid-email") setErr("Invalid username or email.");
-      else if (code === "auth/operation-not-allowed") setErr("Email/Password sign-in is not enabled. Enable it in Firebase Console → Authentication.");
-      else if (code === "auth/too-many-requests") setErr("Too many attempts. Please wait a moment and try again.");
-      else if (code === "auth/network-request-failed") setErr("Network error. Check your connection.");
+      else if (code === "auth/user-not-found") setErr("User not found. Check email or toggle Sign Up.");
+      else if (code === "auth/email-already-in-use") setErr("Email is already registered. Please Sign In instead.");
+      else if (code === "auth/weak-password") setErr("Password must be at least 6 characters.");
+      else if (code === "auth/invalid-email") setErr("Invalid username or email format.");
+      else if (code === "auth/network-request-failed") setErr("Network error. You can still use Offline Field Mode.");
       else setErr(e.message ?? "Authentication failed.");
     } finally {
       setLoading(false);
     }
   };
 
+  const handleOfflineGuest = () => {
+    const guestUser: AppUser = {
+      uid: "offline-field-officer",
+      email: "field.officer@local.device",
+      role: "inspector",
+      displayName: "Field Inspector (Offline)",
+      isOfflineUser: true,
+    };
+    onLogin(guestUser);
+    toast.info("Offline Field Mode Active", {
+      description: "Inspections, checklist edits, and photos will be saved locally to IndexedDB.",
+    });
+  };
+
   return <div className="login-shell">
     <div className="login-wrap">
       <div className="login-brand"><Brand/><p className="login-tagline">Field Inspection Operating System</p></div>
       <div className="login-card">
-        <div className="login-card-header"><h2>Sign In</h2><p>Enter your credentials to access your workspace</p></div>
+        <div className="login-card-header">
+          <h2>{isSignUp ? "Create Field Account" : "Sign In to OFF2FIELD"}</h2>
+          <p>{isSignUp ? "Register a new field inspector or admin profile" : "Enter your credentials to access your workspace"}</p>
+        </div>
         <form className="login-form" onSubmit={submit}>
-          <div className="login-field"><label>Username or Email</label><input type="text" placeholder="Enter username or email" value={user} onChange={e => setUser(e.target.value)} autoFocus/></div>
-          <div className="login-field"><label>Password</label><div className="pass-wrap"><input type={showPass ? "text" : "password"} placeholder="••••••••" value={pass} onChange={e => setPass(e.target.value)}/><button type="button" className="pass-toggle" onClick={() => setShowPass(v => !v)}>{showPass ? <EyeOff size={14}/> : <Eye size={14}/>}</button></div></div>
-          <label className="remember-check"><input type="checkbox" checked={rememberDevice} onChange={e => setRememberDevice(e.target.checked)}/><span>Remember this device</span></label>
+          <div className="login-field">
+            <label>Username or Email</label>
+            <input
+              type="text"
+              placeholder="e.g. inspector@off2field.com"
+              value={user}
+              onChange={e => setUser(e.target.value)}
+              autoFocus
+            />
+          </div>
+          <div className="login-field">
+            <label>Password</label>
+            <div className="pass-wrap">
+              <input
+                type={showPass ? "text" : "password"}
+                placeholder="••••••••"
+                value={pass}
+                onChange={e => setPass(e.target.value)}
+              />
+              <button type="button" className="pass-toggle" onClick={() => setShowPass(v => !v)}>
+                {showPass ? <EyeOff size={14}/> : <Eye size={14}/>}
+              </button>
+            </div>
+          </div>
+
+          {isSignUp && (
+            <div className="login-field">
+              <label>Role</label>
+              <select
+                value={roleSelect}
+                onChange={e => setRoleSelect(e.target.value as Role)}
+                style={{ width: "100%", padding: "10px", borderRadius: "8px", border: "1px solid #cbd5e1", background: "white", fontSize: "14px" }}
+              >
+                <option value="inspector">Field Inspector</option>
+                <option value="admin">Supervisor / Admin</option>
+              </select>
+            </div>
+          )}
+
           {err && <div className="login-error">{err}</div>}
-          <button type="submit" className="login-submit inspector" disabled={loading || !user || !pass}>{loading && <span className="login-spinner"/>}{loading ? "Signing in…" : "Sign in"}</button>
+          <button type="submit" className="login-submit inspector" disabled={loading || !user || !pass}>
+            {loading && <span className="login-spinner"/>}
+            {loading ? (isSignUp ? "Creating account…" : "Signing in…") : (isSignUp ? "Create Account" : "Sign In")}
+          </button>
+
+          <div style={{ display: "flex", justifyContent: "center", marginTop: "10px" }}>
+            <button
+              type="button"
+              className="text-btn"
+              style={{ fontSize: "12px", color: "var(--brand, #0284c7)" }}
+              onClick={() => { setIsSignUp(!isSignUp); setErr(""); }}
+            >
+              {isSignUp ? "Already have an account? Sign In" : "Need an account? Create one"}
+            </button>
+          </div>
+
           <div style={{marginTop:12,borderTop:"1px solid #e2e8f0",paddingTop:12,textAlign:"center"}}>
             <button
               type="button"
               className="btn secondary"
               style={{width:"100%",justifyContent:"center",fontSize:"12px",padding:"8px"}}
-              onClick={() => onLogin("inspector", false)}
+              onClick={handleOfflineGuest}
             >
               <CloudOff size={14} color="#f59e0b"/> Work in Offline Field Mode (No login required)
             </button>
@@ -1047,7 +1175,32 @@ function LoginPage({ onLogin }: { onLogin: (role: Role, remember: boolean) => vo
 function Brand({ compact = false }: { compact?: boolean }) { return <div className="brand"><div className="brand-symbol"><span></span><span></span><span></span></div>{!compact && <div><strong>OFF<span>2</span>FIELD</strong><small>FIELD INSPECTION OS</small></div>}</div> }
 function NavItem({ item, active, onClick, badge }: any) { return <button className={"nav-item " + (active ? "active" : "")} onClick={onClick}><item.icon size={17}/><span>{item.label}</span>{badge !== undefined && <em>{badge}</em>}</button> }
 function Connection({ offline, onClick }: { offline: boolean; onClick: () => void }) { return <button onClick={onClick} className={"connection " + (offline ? "is-offline" : "")}><span className="status-dot"></span>{offline ? "OFFLINE" : "ONLINE"}<ChevronRight size={13}/></button> }
-function Topbar({ page, offline, isSyncing, toggleOffline, savedCount, sync }: any) { const title = page === "workspace" ? "Inspection workspace" : page === "dashboard" ? "Operations overview" : nav.find(n => n.key === page)?.label; return <div className="topbar"><div><h1>{title}</h1></div><div className="top-actions"><div className="local-save"><span className="pulse"></span><span><strong>Local storage protected</strong><small>Last saved just now</small></span></div><button className="top-icon"><Bell size={18}/><i></i></button><Connection offline={offline} onClick={toggleOffline}/><button className="sync-btn" onClick={sync} disabled={isSyncing} style={isSyncing ? {opacity:0.7,cursor:"not-allowed"} : {}}><RefreshCw size={15} style={isSyncing ? {animation:"spin 1s linear infinite"} : {}}/> {isSyncing ? "Syncing…" : <>Sync {savedCount > 0 && <b>{savedCount}</b>}</>}</button></div></div> }
+function Topbar({ page, offline, isSyncing, toggleOffline, savedCount, sync, userEmail }: any) {
+  const title = page === "workspace" ? "Inspection workspace" : page === "dashboard" ? "Operations overview" : nav.find(n => n.key === page)?.label;
+  return (
+    <div className="topbar">
+      <div><h1>{title}</h1></div>
+      <div className="top-actions">
+        {/* Review status indicator area */}
+        <div style={{ display: "flex", gap: "6px", alignItems: "center", fontSize: "11px", background: "rgba(15, 23, 42, 0.05)", padding: "5px 10px", borderRadius: "6px" }}>
+          <span style={{ color: "var(--muted, #64748b)" }}>User: <strong style={{ color: "var(--ink, #0f172a)" }}>{userEmail || "Field Officer"}</strong></span>
+          <span style={{ color: "#cbd5e1" }}>|</span>
+          <span style={{ color: offline ? "#d97706" : "#16a34a", fontWeight: 700 }}>{offline ? "OFFLINE" : "ONLINE"}</span>
+          <span style={{ color: "#cbd5e1" }}>|</span>
+          <span style={{ color: isSyncing ? "#0284c7" : savedCount > 0 ? "#d97706" : "#16a34a", fontWeight: 700 }}>
+            {isSyncing ? "SYNCING" : savedCount > 0 ? `PENDING (${savedCount})` : "SYNCED"}
+          </span>
+        </div>
+        <div className="local-save"><span className="pulse"></span><span><strong>IndexedDB protected</strong><small>Saved offline</small></span></div>
+        <button className="top-icon"><Bell size={18}/><i></i></button>
+        <Connection offline={offline} onClick={toggleOffline}/>
+        <button className="sync-btn" onClick={sync} disabled={isSyncing} style={isSyncing ? {opacity:0.7,cursor:"not-allowed"} : {}}>
+          <RefreshCw size={15} style={isSyncing ? {animation:"spin 1s linear infinite"} : {}}/> {isSyncing ? "Syncing…" : <>Sync {savedCount > 0 && <b>{savedCount}</b>}</>}
+        </button>
+      </div>
+    </div>
+  );
+}
 
 function PageIntro({ eyebrow, title, description, actions }: any) { return <div className="page-intro"><div><div className="eyebrow">{eyebrow}</div><h2>{title}</h2><p>{description}</p></div><div className="intro-actions">{actions}</div></div> }
 function Dashboard({ go, offline, savedCount, openInspection }: any) { return <><div className="dash-actions"><button className="btn secondary" onClick={() => go("scanner")}><QrCode size={16}/> Scan machine</button><button className="btn primary" onClick={() => openInspection()}><PlusIcon/> Start inspection</button></div><div className="stat-grid">{[["Assigned inspections","12","+2 this week","blue",ClipboardCheck,"inspections"],["In progress","03","2 due today","amber",Activity,"inspections"],["Submitted","08","+4 this week","green",Send,"inspections"],["Pending review","04","Supervisor queue","violet",Clock3,"inspections"],["Conflicts","01","Needs resolution","red",AlertTriangle,"conflicts"],["Approved","27","92% acceptance","teal",CheckCircle2,"history"]].map(([label,value,sub,color,Icon,dest]: any[]) => <button className="stat-card stat-card-btn" key={label as string} onClick={() => go(dest)}><div className={"stat-icon " + color}><Icon size={17}/></div><div className="stat-copy"><span>{label}</span><strong>{value}</strong><small className={color === "red" ? "danger-text" : ""}>{sub}</small></div><ChevronRight size={14} className="muted-icon stat-arrow"/></button>)}</div><div className="dashboard-grid"><section className="panel readiness"><PanelHeader title="Offline readiness" icon={<Wifi size={17}/>} action={<span className="ready-chip"><span></span> Device ready</span>}/><div className="readiness-body"><div className="readiness-score"><div className="score-ring"><strong>100</strong><span>%</span></div><div><strong>READY FOR<br/>OFFLINE WORK</strong><small>All field dependencies are cached</small></div></div><div className="checks">{["App available offline","Assignments downloaded","Machine data available","Templates available","Permissions cached","Storage available"].map(x => <div key={x}><CheckCircle2 size={16}/><span>{x}</span><small>Verified</small></div>)}</div></div></section><section className="panel workload"><PanelHeader title="Today’s workload" icon={<BarChart3 size={17}/>} action={<button className="text-btn" onClick={() => go("inspections")}>View all <ArrowRight size={14}/></button>}/><div className="workload-rows">{[["INS-2026-TN-0001","TRF-102 · Substation A","High","2h 14m","high"],["INS-2026-TN-0002","TRF-117 · Substation B","Medium","5h 08m","medium"],["INS-2026-TN-0003","PMP-301 · Pump House 4","Low","Tomorrow","low"]].map((x, i) => <button className="work-row" onClick={() => openInspection(x[0])} key={x[0]}><div className="work-index">0{i+1}</div><div className="work-main"><strong>{x[0]}</strong><span>{x[1]}</span></div><span className={"priority " + x[4]}>{x[2]}</span><div className="work-time"><Clock3 size={13}/>{x[3]}</div><ChevronRight size={15}/></button>)}</div></section></div><div className="lower-grid"><section className="panel activity-panel"><PanelHeader title="Recent activity" icon={<Activity size={17}/>} action={<button className="text-btn" onClick={() => go("audit")}>Audit trail <ArrowRight size={14}/></button>}/><Timeline items={[["Inspection created","INS-2026-TN-0001","Pragatheesh","10:00","blue"],["Checklist updated","Oil Temperature · 78 °C","Saved locally","10:41","amber"],["Photo evidence added","EVD-2026-00001","TRF-102 / Item 04","10:43","purple"],["Conflict detected","Temperature value","Sync queue","10:44","red"]]}/></section><section className="panel sync-panel"><PanelHeader title="Sync health" icon={<RefreshCw size={17}/>} action={<button className="icon-btn"><MoreHorizontal size={17}/></button>}/><div className="sync-health"><div className="health-number"><strong>98.4<span>%</span></strong><small>Successful operations</small></div><div className="health-bars">{Array.from({length: 18}).map((_,i)=><i key={i} style={{height: `${18 + ((i*17)%60)}%`}}></i>)}</div></div><div className="sync-meta"><div><span className="dot green-dot"></span>Last sync <strong>Today, 09:58</strong></div><div><span className="dot amber-dot"></span>{offline ? "Offline queue" : "Pending changes"} <strong>{savedCount} operations</strong></div></div></section></div></> }
@@ -1500,106 +1653,365 @@ function OfflineWorkspace({ go, refreshQueue, setInspectionsList, onSubmitted }:
 function Overview({ activeMachine, machineCode }: any){ return <div className="overview-grid"><div className="panel overview-hero"><div className="machine-illustration"><div className="transformer"><span></span><span></span><span></span></div></div><div><div className="eyebrow">MACHINE PROFILE</div><h3>{machineCode || "TRF-102"} · {activeMachine?.name || "Transformer T-102"}</h3><p>{activeMachine?.type || "Operational equipment"} · Installed 2018</p><div className="overview-tags"><span>{activeMachine?.location || "Substation A"}</span><span>Last inspected 18 Sep 2026</span></div></div></div><div className="panel"><PanelHeader title="Previous readings" icon={<History size={16}/>} /><div className="reading-grid">{[["Primary parameter","72 °C","18 Sep"],["Secondary parameter","84 %","18 Sep"],["Load current","184 A","18 Sep"],["Condition","Normal","18 Sep"]].map(x=><div key={x[0]}><span>{x[0]}</span><strong>{x[1]}</strong><small>{x[2]}</small></div>)}</div></div></div>}
 function Submission({status, onSubmitClick}:any){return <div className="submission-grid"><section className="panel submission-panel"><div className="eyebrow">APPROVAL WORKFLOW</div><h3>Inspection lifecycle</h3><div className="workflow">{["DRAFT","SUBMITTED","UNDER REVIEW","APPROVED"].map((x,i)=><div className={(status===x||["SUBMITTED","UNDER REVIEW","APPROVED"].indexOf(status)>i)?"step done":"step"} key={x}><div>{(["SUBMITTED","UNDER REVIEW","APPROVED"].indexOf(status)>i||status===x)?<Check size={15}/>:i+1}</div><span>{x}</span></div>)}</div><div className="submission-note"><ShieldCheck size={18}/><div><strong>Traceable submission</strong><p>Submitting creates an append-only audit event and queues the package for supervisor review.</p></div></div><button className="btn primary" onClick={onSubmitClick} disabled={status === "SUBMITTED" || status === "APPROVED"}><Send size={15}/> {status === "DRAFT" ? "Submit inspection" : "Inspection Submitted"}</button></section><section className="panel"><PanelHeader title="Validation summary" icon={<CheckCircle2 size={16}/>} />{["All required checklist values present","Evidence package attached","No critical conflicts","Local changes synchronized"].map((x,i)=><div className="validation-row" key={x}><CheckCircle2 size={16}/><span>{x}</span><small>{i===3?"Pending":"Passed"}</small></div>)}</section></div>}
 
-function Machines({go, startNewInspection}:any){
+function Machines({go, startNewInspection, onOpenScanner}:any){
   const machinesList = Object.entries(machineTemplates).map(([code, data]) => [
     code,
     data.name,
     data.location.split("·")[0].trim(),
     "Operational",
     data.type,
+    data.category,
     "green"
   ]);
 
-  return <><PageIntro eyebrow="ASSET REGISTER / MACHINES" title="Machines" description="Offline-cached equipment registry for field identification and inspection context." actions={<button className="btn primary" onClick={()=>go("scanner")}><QrCode size={16}/> Scan machine</button>}/><div className="machine-grid">{machinesList.map(x=><button className="machine-card panel" key={x[0]} onClick={()=>startNewInspection(x[0])}><div className="machine-top"><div className="machine-icon"><Cog size={20}/></div><StatusChip status="APPROVED"/></div><div className="eyebrow">{x[0]}</div><h3>{x[1]}</h3><p>{x[2]}</p><div className="machine-footer"><span>{x[4]}</span><span>Inspect <ChevronRight size={14}/></span></div></button>)}</div></>
-}
-function Scanner({go, startNewInspection}:any){
-  const [scanned,setScanned]=useState(false); 
-  return <><PageIntro eyebrow="FIELD TOOLS / IDENTIFICATION" title="QR scanner" description="Identify a machine from its QR label, even when the device is offline." actions={<span className="ready-chip"><span></span> Camera ready</span>}/><div className="scanner-layout"><section className="panel scanner-panel"><div className="scanner-frame"><div className="scan-corner tl"></div><div className="scan-corner tr"></div><div className="scan-corner bl"></div><div className="scan-corner br"></div><div className="scan-line"></div><QrCode size={78} strokeWidth={1}/></div><p>Point camera at a machine QR label</p><button className="btn primary" onClick={()=>{setScanned(true);toast.success("Machine identified",{description:"TRF-102 found in offline machine cache."})}}><QrCode size={16}/> Simulate scan · TRF-102</button></section>{scanned?<section className="panel machine-result"><div className="result-badge"><CheckCircle2 size={16}/> MACHINE FOUND OFFLINE</div><div className="eyebrow">MACHINE RECORD</div><h3>TRF-102 · Transformer T-102</h3><p>Substation A · Chennai North</p><div className="result-list"><div><span>Status</span><strong className="online-label"><span className="status-dot"></span> Operational</strong></div><div><span>Last inspection</span><strong>18 Sep 2026</strong></div><div><span>Previous readings</span><strong>6 values cached</strong></div><div><span>QR identifier</span><strong className="mono">TRF-102</strong></div></div><div className="result-actions"><button className="btn primary" onClick={()=>startNewInspection("TRF-102")}>Start inspection <ArrowRight size={15}/></button><button className="btn secondary" onClick={()=>go("history")}>View history</button></div></section>:<section className="panel scanner-help"><QrCode size={30}/><h3>Fast, offline identification</h3><p>Machine records are cached on this device. Scan a label to retrieve specifications, prior readings, and inspection history without a network connection.</p></section>}</div></>;
+  return (
+    <>
+      <PageIntro
+        eyebrow="ASSET REGISTER / MACHINES"
+        title="Field Equipment Registry"
+        description="High-voltage power transformers, switchgear, generators, and solar inverters cached offline."
+        actions={
+          <button className="btn primary" onClick={() => onOpenScanner ? onOpenScanner() : go("scanner")}>
+            <QrCode size={16}/> Scan machine QR
+          </button>
+        }
+      />
+      <div className="machine-grid">
+        {machinesList.map(x => (
+          <button
+            className="machine-card panel machine-card-faded"
+            key={x[0]}
+            onClick={() => startNewInspection(x[0])}
+          >
+            <div className="machine-card-overlay"></div>
+            <div className="machine-top">
+              <div className="machine-icon"><Cog size={20}/></div>
+              <div style={{display:"flex",gap:6,alignItems:"center"}}>
+                <span className="machine-category-pill">{x[5]}</span>
+                <StatusChip status="APPROVED"/>
+              </div>
+            </div>
+            <div className="machine-content-wrap">
+              <div className="eyebrow mono" style={{color:"#38bdf8",fontWeight:700}}>{x[0]}</div>
+              <h3 style={{color:"#ffffff",fontSize:14,fontWeight:700,margin:"4px 0 2px"}}>{x[1]}</h3>
+              <p style={{color:"#cbd5e1",fontSize:11,margin:"0 0 16px"}}>{x[2]}</p>
+              <div className="machine-footer" style={{borderTop:"1px solid rgba(255,255,255,0.12)",paddingTop:10}}>
+                <span style={{color:"#93c5fd",fontSize:10}}>{x[4]}</span>
+                <span style={{color:"#38bdf8",fontWeight:600}}>Start Inspection <ChevronRight size={13}/></span>
+              </div>
+            </div>
+          </button>
+        ))}
+      </div>
+    </>
+  );
 }
 
-function Evidence({ evidenceList = [], savedCount, onCaptureEvidence, onDeleteEvidence, onSyncEvidence, offline }: any) {
+function Scanner({go, startNewInspection, onOpenLiveScanner}:any){
+  const [scanned,setScanned]=useState(false); 
+  return (
+    <>
+      <PageIntro
+        eyebrow="FIELD TOOLS / IDENTIFICATION"
+        title="Live QR Scanner"
+        description="Identify equipment on-site via QR code label using device camera, even offline."
+        actions={<span className="ready-chip"><span></span> Live Camera Ready</span>}
+      />
+      <div className="scanner-layout">
+        <section className="panel scanner-panel">
+          <div className="scanner-frame">
+            <div className="scan-corner tl"></div>
+            <div className="scan-corner tr"></div>
+            <div className="scan-corner bl"></div>
+            <div className="scan-corner br"></div>
+            <div className="scan-line"></div>
+            <QrCode size={78} strokeWidth={1}/>
+          </div>
+          <p style={{marginBottom:14}}>Point Android/device camera at machine QR tag for instant lookup</p>
+          <div style={{display:"flex",flexDirection:"column",gap:10,maxWidth:320,margin:"0 auto"}}>
+            <button
+              className="btn primary"
+              style={{height:42,fontSize:13,justifyContent:"center"}}
+              onClick={() => onOpenLiveScanner ? onOpenLiveScanner() : toast.info("Opening scanner...")}
+            >
+              <Camera size={17}/> Launch Camera QR Scanner
+            </button>
+            <button
+              className="btn secondary"
+              style={{justifyContent:"center"}}
+              onClick={() => {
+                setScanned(true);
+                toast.success("Machine identified", { description: "TRF-102 found in offline machine cache." });
+              }}
+            >
+              <QrCode size={15}/> Quick Test · TRF-102
+            </button>
+          </div>
+        </section>
+
+        {scanned ? (
+          <section className="panel machine-result">
+            <div className="result-badge"><CheckCircle2 size={16}/> MACHINE FOUND OFFLINE</div>
+            <div className="eyebrow">MACHINE RECORD</div>
+            <h3>TRF-102 · Transformer T-102</h3>
+            <p>Substation A · Chennai North</p>
+            <div className="result-list">
+              <div><span>Status</span><strong className="online-label"><span className="status-dot"></span> Operational</strong></div>
+              <div><span>Category</span><strong>Transformers (132/33 kV)</strong></div>
+              <div><span>Last inspection</span><strong>18 Sep 2026</strong></div>
+              <div><span>Checklist template</span><strong>6 baseline parameters cached</strong></div>
+              <div><span>QR identifier</span><strong className="mono">TRF-102</strong></div>
+            </div>
+            <div className="result-actions">
+              <button className="btn primary" onClick={() => startNewInspection("TRF-102")}>Start inspection <ArrowRight size={15}/></button>
+              <button className="btn secondary" onClick={() => go("history")}>View history</button>
+            </div>
+          </section>
+        ) : (
+          <section className="panel scanner-help">
+            <QrCode size={34}/>
+            <h3>Instant Offline Machine Identification</h3>
+            <p>All 14 equipment records and baseline parameters are cached in Dexie IndexedDB. Scanning immediately starts the routine without requiring network access.</p>
+          </section>
+        )}
+      </div>
+    </>
+  );
+}
+
+function BlobImagePreview({ blob, dataUrl, alt }: { blob?: Blob; dataUrl?: string; alt: string }) {
+  const [objectUrl, setObjectUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (blob) {
+      const url = URL.createObjectURL(blob);
+      setObjectUrl(url);
+      return () => {
+        URL.revokeObjectURL(url);
+      };
+    } else if (dataUrl) {
+      setObjectUrl(dataUrl);
+    } else {
+      setObjectUrl(null);
+    }
+  }, [blob, dataUrl]);
+
+  if (!objectUrl) {
+    return (
+      <div style={{ display: "grid", placeItems: "center", height: "100%", color: "#64748b" }}>
+        <ImageIcon size={32} />
+      </div>
+    );
+  }
+
+  return (
+    <img
+      src={objectUrl}
+      alt={alt}
+      style={{ width: "100%", height: "100%", objectFit: "cover" }}
+    />
+  );
+}
+
+function EvidenceLightboxModal({
+  item,
+  onClose,
+  chipClass,
+  chipLabel,
+  fmtSize,
+}: any) {
+  const [objectUrl, setObjectUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (item.blob) {
+      const url = URL.createObjectURL(item.blob);
+      setObjectUrl(url);
+      return () => {
+        URL.revokeObjectURL(url);
+      };
+    } else if (item.dataUrl) {
+      setObjectUrl(item.dataUrl);
+    }
+  }, [item]);
+
+  return (
+    <div className="evidence-lightbox-backdrop" onClick={onClose}>
+      <div className="evidence-lightbox-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="evidence-lightbox-header">
+          <div>
+            <strong style={{ fontSize: 13 }}>{item.fileName || item.description || item.title || item.name}</strong>
+            <div style={{ fontSize: 10, color: "#64748b", marginTop: 3 }}>
+              {item.id} · {item.inspectionId}
+            </div>
+          </div>
+          <button className="evidence-icon-btn" onClick={onClose}>
+            <X size={15} />
+          </button>
+        </div>
+        <div className="evidence-lightbox-body">
+          {objectUrl ? (
+            <img src={objectUrl} alt={item.fileName || item.description} className="evidence-lightbox-img" />
+          ) : (
+            <div style={{ color: "#64748b", textAlign: "center" }}>
+              <FileText size={48} />
+              <p>No preview</p>
+            </div>
+          )}
+        </div>
+        <div className="evidence-lightbox-footer">
+          <span>
+            {item.fileType || item.mimeType || "image/jpeg"} · {fmtSize(item.fileSize || item.size || 0)}
+          </span>
+          <span className={chipClass(item.syncStatus)} style={{ position: "static", boxShadow: "none" }}>
+            {chipLabel(item.syncStatus)}
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Evidence({
+  evidenceList = [],
+  savedCount,
+  onCaptureEvidence,
+  onOpenLiveCamera,
+  onDeleteEvidence,
+  onSyncEvidence,
+  offline
+}: any) {
   const [lightbox, setLightbox] = useState<any>(null);
+  const [showAllRefs, setShowAllRefs] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const items: any[] = Array.isArray(evidenceList) ? evidenceList : [];
   const pendingItems = items.filter((x: any) => x.syncStatus === "PENDING" || x.syncStatus === "FAILED");
   const syncedItems = items.filter((x: any) => x.syncStatus === "SYNCED");
+
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    for (const file of Array.from(e.target.files || [])) { if (onCaptureEvidence) await onCaptureEvidence({ file }); }
+    for (const file of Array.from(e.target.files || [])) {
+      if (onCaptureEvidence) await onCaptureEvidence({ file });
+    }
     e.target.value = "";
   };
-  const chipClass = (s: string) => s === "SYNCED" ? "evidence-chip-status synced" : s === "SYNCING" ? "evidence-chip-status syncing" : "evidence-chip-status pending";
-  const chipLabel = (s: string) => s === "SYNCED" ? "✓ Uploaded" : s === "SYNCING" ? "↑ Syncing…" : s === "FAILED" ? "✕ Failed" : "● Pending";
+
+  const chipClass = (s: string) => s === "SYNCED" ? "evidence-chip-status synced" : s === "SYNCING" ? "evidence-chip-status syncing" : s === "FAILED" ? "evidence-chip-status failed" : "evidence-chip-status pending";
+  const chipLabel = (s: string) => s === "SYNCED" ? "✓ Synced to Cloud" : s === "SYNCING" ? "↑ Uploading…" : s === "FAILED" ? "✕ Failed" : "● Stored in Dexie (Pending)";
   const fmtSize = (b: number) => b > 1048576 ? `${(b/1048576).toFixed(1)} MB` : `${Math.round(b/1024)} KB`;
   const fmtTime = (iso: string) => { try { return new Date(iso).toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"}); } catch { return "—"; } };
+
   return (
     <>
-      <PageIntro eyebrow="INSPECTION / EVIDENCE" title="Evidence gallery"
-        description="Photos and files are stored in IndexedDB first, then uploaded through the persistent sync queue."
-        actions={<>
-          <button className="btn secondary" onClick={() => fileInputRef.current?.click()}><ImageIcon size={14}/> Upload file</button>
-          <button className="btn primary" onClick={() => onCaptureEvidence?.()}><Camera size={15}/> Capture photo</button>
-          <input ref={fileInputRef} type="file" accept="image/*,application/pdf" multiple style={{display:"none"}} onChange={handleFileChange}/>
-        </>}
+      <PageIntro
+        eyebrow="INSPECTION / EVIDENCE"
+        title="Evidence & Reference Hub"
+        description="Offline-first photo capture stored in IndexedDB first, with automatic background sync to Firebase Storage & Firestore."
+        actions={
+          <>
+            <button className="btn secondary" onClick={() => fileInputRef.current?.click()}>
+              <ImageIcon size={14}/> Select Device Photo
+            </button>
+            <button className="btn primary" onClick={() => onOpenLiveCamera ? onOpenLiveCamera() : fileInputRef.current?.click()}>
+              <Camera size={15}/> Capture Live Photo
+            </button>
+            <input ref={fileInputRef} type="file" accept="image/*" multiple style={{display:"none"}} onChange={handleFileChange}/>
+          </>
+        }
       />
-      <div className="evidence-summary">
-        <div><HardDrive size={17}/><span>Stored locally</span><strong>{String(items.length).padStart(2,"0")} items</strong></div>
-        <div><Upload size={17}/><span>Pending upload</span><strong>{String(pendingItems.length).padStart(2,"0")} items</strong></div>
-        <div><CheckCircle2 size={17}/><span>Uploaded</span><strong>{String(syncedItems.length).padStart(2,"0")} items</strong></div>
-      </div>
-      {items.length === 0 && (
-        <div className="empty-tab panel" style={{marginTop:0}}>
-          <Archive size={22}/><h3>No evidence stored yet</h3>
-          <p>Capture a photo or upload a file — it will be saved locally to IndexedDB and queued for sync.</p>
-          <button className="btn primary" style={{marginTop:12}} onClick={() => onCaptureEvidence?.()}><Camera size={15}/> Capture first photo</button>
+
+      {/* ── 1. MACHINE REFERENCE SECTION (Prompt Requirement 5) ── */}
+      <div style={{marginBottom:24}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+          <div style={{fontSize:11,fontWeight:700,color:"#475569",textTransform:"uppercase",letterSpacing:1}}>
+            1. Official Equipment Reference Diagrams (Visual Inspection Aid)
+          </div>
+          <button
+            className="text-btn"
+            style={{fontSize:11}}
+            onClick={() => setShowAllRefs(v => !v)}
+          >
+            {showAllRefs ? "Show Active Category Only" : "View All 5 Categories"}
+          </button>
         </div>
-      )}
-      {items.length > 0 && (
-        <div className="evidence-grid">
-          {items.map((ev: any) => (
-            <div className="evidence-card" key={ev.id}>
-              <div className="evidence-preview-wrap" onClick={() => setLightbox(ev)}>
-                {ev.dataUrl
-                  ? <img src={ev.dataUrl} alt={ev.title} style={{width:"100%",height:"100%",objectFit:"cover"}}/>
-                  : <div style={{display:"grid",placeItems:"center",height:"100%",color:"#64748b"}}><FileText size={32}/></div>}
-                <div className="evidence-preview-overlay"><Eye size={14}/> View</div>
-                <span className={chipClass(ev.syncStatus)}>{chipLabel(ev.syncStatus)}</span>
-                <span className="evidence-meta-pill">{ev.category || "PHOTO"}</span>
-              </div>
-              <div className="evidence-card-content">
-                <div className="evidence-card-title">{ev.title || ev.name}</div>
-                <div className="evidence-card-sub">{ev.id} · {ev.inspectionId || "—"}</div>
-                <div className="evidence-card-footer">
-                  <span style={{fontSize:9,color:"#94a3b8",fontFamily:"'DM Mono',monospace"}}>{fmtSize(ev.size||0)} · {fmtTime(ev.createdAt)}</span>
-                  <div className="evidence-btn-group">
-                    {(ev.syncStatus === "PENDING" || ev.syncStatus === "FAILED") && !offline && (
-                      <button className="evidence-icon-btn" title="Sync now" onClick={() => onSyncEvidence?.(ev)}><Upload size={12}/></button>
-                    )}
-                    <button className="evidence-icon-btn danger" title="Delete locally" onClick={() => onDeleteEvidence?.(ev.id)}><Trash2 size={12}/></button>
+        <MachineReferenceGuides category="Transformers" showAll={showAllRefs} />
+      </div>
+
+      {/* ── 2. USER UPLOADED EVIDENCE SECTION ── */}
+      <div style={{marginTop:28}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+          <div>
+            <div style={{fontSize:11,fontWeight:700,color:"#475569",textTransform:"uppercase",letterSpacing:1}}>
+              2. On-Site Field Evidence ({items.length} records)
+            </div>
+            <p style={{fontSize:11,color:"#64748b",margin:"2px 0 0"}}>
+              Photos captured on-site and stored in Dexie IndexedDB. Syncs to Firebase when online.
+            </p>
+          </div>
+        </div>
+
+        <div className="evidence-summary">
+          <div><HardDrive size={17}/><span>Stored in IndexedDB</span><strong>{String(items.length).padStart(2,"0")} items</strong></div>
+          <div><Upload size={17}/><span>Pending upload</span><strong>{String(pendingItems.length).padStart(2,"0")} items</strong></div>
+          <div><CheckCircle2 size={17}/><span>Synced to Firebase</span><strong>{String(syncedItems.length).padStart(2,"0")} items</strong></div>
+        </div>
+
+        {items.length === 0 && (
+          <div className="empty-tab panel" style={{marginTop:0}}>
+            <Archive size={22}/>
+            <h3>No field photos captured yet</h3>
+            <p>Tap "Capture Live Photo" to take a snapshot with the camera or upload an image file.</p>
+            <button
+              className="btn primary"
+              style={{marginTop:12}}
+              onClick={() => onOpenLiveCamera ? onOpenLiveCamera() : fileInputRef.current?.click()}
+            >
+              <Camera size={15}/> Take First Field Photo
+            </button>
+          </div>
+        )}
+
+        {items.length > 0 && (
+          <div className="evidence-grid">
+            {items.map((ev: any) => (
+              <div className="evidence-card" key={ev.id}>
+                <div className="evidence-preview-wrap" onClick={() => setLightbox(ev)}>
+                  <BlobImagePreview blob={ev.blob} dataUrl={ev.dataUrl} alt={ev.fileName || ev.description || ev.title} />
+                  <div className="evidence-preview-overlay"><Eye size={14}/> Full Preview</div>
+                  <span className={chipClass(ev.syncStatus)}>{chipLabel(ev.syncStatus)}</span>
+                  <span className="evidence-meta-pill">{ev.category || "PHOTO"}</span>
+                </div>
+                <div className="evidence-card-content">
+                  <div className="evidence-card-title">{ev.fileName || ev.description || ev.title || ev.name}</div>
+                  <div className="evidence-card-sub">{ev.id} · {ev.inspectionId || "—"}</div>
+                  <div className="evidence-card-footer">
+                    <span style={{fontSize:9,color:"#64748b",fontFamily:"'DM Mono',monospace"}}>
+                      {fmtSize(ev.fileSize || ev.size || 0)} · {fmtTime(ev.createdAt)}
+                    </span>
+                    <div className="evidence-btn-group">
+                      {(ev.syncStatus === "PENDING" || ev.syncStatus === "FAILED") && !offline && (
+                        <button className="evidence-icon-btn" title="Sync now to Firebase" onClick={() => onSyncEvidence?.(ev)}>
+                          <Upload size={12}/>
+                        </button>
+                      )}
+                      <button className="evidence-icon-btn danger" title="Delete locally" onClick={() => onDeleteEvidence?.(ev.id)}>
+                        <Trash2 size={12}/>
+                      </button>
+                    </div>
                   </div>
                 </div>
               </div>
-            </div>
-          ))}
-        </div>
-      )}
-      {lightbox && (
-        <div className="evidence-lightbox-backdrop" onClick={() => setLightbox(null)}>
-          <div className="evidence-lightbox-modal" onClick={e => e.stopPropagation()}>
-            <div className="evidence-lightbox-header">
-              <div><strong style={{fontSize:13}}>{lightbox.title||lightbox.name}</strong><div style={{fontSize:10,color:"#64748b",marginTop:3}}>{lightbox.id} · {lightbox.inspectionId}</div></div>
-              <button className="evidence-icon-btn" onClick={() => setLightbox(null)}><X size={15}/></button>
-            </div>
-            <div className="evidence-lightbox-body">
-              {lightbox.dataUrl
-                ? <img src={lightbox.dataUrl} alt={lightbox.title} className="evidence-lightbox-img"/>
-                : <div style={{color:"#64748b",textAlign:"center"}}><FileText size={48}/><p>No preview</p></div>}
-            </div>
-            <div className="evidence-lightbox-footer">
-              <span>{lightbox.mimeType||"image/jpeg"} · {fmtSize(lightbox.size||0)}</span>
-              <span className={chipClass(lightbox.syncStatus)} style={{position:"static",boxShadow:"none"}}>{chipLabel(lightbox.syncStatus)}</span>
-            </div>
+            ))}
           </div>
-        </div>
+        )}
+      </div>
+
+      {lightbox && (
+        <EvidenceLightboxModal
+          item={lightbox}
+          onClose={() => setLightbox(null)}
+          chipClass={chipClass}
+          chipLabel={chipLabel}
+          fmtSize={fmtSize}
+        />
       )}
     </>
   );
