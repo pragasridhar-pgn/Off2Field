@@ -2,7 +2,7 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     
-    // User profile document: only the owner can read and write
+    // User profile document: only the authenticated owner can read and write
     match /users/{userId} {
       allow read, write: if request.auth != null && request.auth.uid == userId;
       
@@ -15,6 +15,11 @@ service cloud.firestore {
           allow read, write: if request.auth != null && request.auth.uid == userId;
         }
       }
+    }
+
+    // Devices register collection
+    match /devices/{deviceId} {
+      allow read, write: if request.auth != null;
     }
     
     // Deny all other unmatched paths by default

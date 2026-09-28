@@ -5,13 +5,14 @@ import {
 import { Toaster, toast } from "sonner";
 import { auth, db } from "./firebase/firebaseConfig";
 import {
-  signUp as authSignUp,
-  signIn as authSignIn,
   signOutUser,
   getCurrentUser,
   subscribeToAuthState,
   type AppUser,
+  type UserRole,
 } from "./services/authService";
+import { PhoneLoginPage } from "./components/PhoneLoginPage";
+import { AdminConsole } from "./components/AdminConsole";
 import { pullInitialCloudData } from "./services/cloudDataService";
 import {
   saveInspection,
@@ -56,7 +57,7 @@ import { MachineReferenceGuides } from "./components/MachineReferenceGuides";
 
 type NavKey = "dashboard" | "inspections" | "workspace" | "offline-workspace" | "machines" | "scanner" | "evidence" | "sync" | "conflicts" | "history" | "reports" | "audit" | "admin";
 type Status = "DRAFT" | "SUBMITTED" | "PENDING" | "UNDER REVIEW" | "APPROVED";
-type Role = "inspector" | "admin";
+type Role = UserRole;
 
 const nav = [
   { key: "dashboard", label: "Dashboard", icon: Home }, { key: "inspections", label: "My Inspections", icon: ClipboardCheck },
@@ -909,25 +910,50 @@ export default function App() {
   };
 
   // Show a minimal loading screen while Firebase resolves auth state
-  if (!authReady) return <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"var(--paper)"}}><Brand/></div>;
+  if (!authReady) {
+    return (
+      <div className="startup-splash-shell">
+        <div className="startup-brand-symbol">
+          <span></span>
+          <span></span>
+          <span></span>
+        </div>
+        <h2 style={{ font: "800 22px Manrope", letterSpacing: "-0.5px", margin: "0 0 4px" }}>
+          OFF<span style={{ color: "#38bdf8" }}>2</span>FIELD
+        </h2>
+        <p style={{ color: "#94a3b8", fontSize: 11, fontFamily: "'DM Mono', monospace", letterSpacing: 1.5, margin: "0 0 12px" }}>
+          FIELD INSPECTION OS
+        </p>
+        <div className="startup-loader-spinner"></div>
+        <p style={{ color: "#64748b", fontSize: 11, marginTop: 14 }}>
+          Loading OFF2FIELD…
+        </p>
+      </div>
+    );
+  }
 
-  if (!role) return <LoginPage onLogin={async (userObj) => {
-    setCurrentUser(userObj);
-    setRole(userObj.role);
-    setPage(userObj.role === "admin" ? "reports" : "dashboard");
-  }} />;
+  if (!currentUser || !role) {
+    return (
+      <PhoneLoginPage
+        onLogin={async (userObj) => {
+          setCurrentUser(userObj);
+          setRole(userObj.role);
+          setPage("dashboard");
+        }}
+      />
+    );
+  }
 
-  const inspectorNav = nav.slice(0, 9);
-  const adminNav = nav.slice(9);
-  const mobileNavItems = role === "inspector" ? nav.slice(0, 6) : nav.slice(9);
+  const isAdminRole = role === "Admin" || role === "admin" || role === "Supervisor";
+  const mobileNavItems = nav.slice(0, 6);
 
   return <div className="app-shell">
     <Toaster position="bottom-right" richColors />
     <header className="mobile-header"><button className="icon-btn" onClick={() => setMobileOpen(v => !v)}><Menu size={20}/></button><Brand compact/><div className="mobile-spacer"/><Connection offline={offline} onClick={toggleOffline}/></header>
     <aside className={"sidebar " + (mobileOpen ? "open" : "")}>
       <div className="brand-wrap"><Brand/><button className="icon-btn close-mobile" onClick={() => setMobileOpen(false)}><X size={18}/></button></div>
-      {role === "inspector" && <><div className="nav-label">WORKSPACE</div><nav>{inspectorNav.map(item => <NavItem key={item.key} item={item} active={page === item.key || (page === "workspace" && item.key === "inspections")} onClick={() => go(item.key as NavKey)} badge={item.key === "sync" ? savedCount : item.key === "conflicts" && !resolved ? 1 : undefined}/>)}</nav></>}
-      {role === "admin" && <><div className="nav-label">INSIGHT & CONTROL</div><nav>{adminNav.map(item => <NavItem key={item.key} item={item} active={page === item.key} onClick={() => go(item.key as NavKey)}/>)}</nav></>}
+      <div className="nav-label">INSPECTION WORKSPACE</div>
+      <nav>{nav.map(item => <NavItem key={item.key} item={item} active={page === item.key || (page === "workspace" && item.key === "inspections")} onClick={() => go(item.key as NavKey)} badge={item.key === "sync" ? savedCount : item.key === "conflicts" && !resolved ? 1 : undefined}/>)}</nav>
       {offline && (
         <div style={{padding:"6px 12px 0 12px"}}>
           <button className={"nav-item " + (page === "offline-workspace" ? "active" : "")} style={{background: page === "offline-workspace" ? undefined : "#1e354a", color: "#ffffff", border: "1px solid #f59e0b"}} onClick={() => go("offline-workspace")}>
@@ -939,16 +965,15 @@ export default function App() {
       )}
       <div className="sidebar-bottom">
         <div className="profile">
-          <div className="avatar">{role === "admin" ? "AD" : (currentUser?.email ? currentUser.email.slice(0, 2).toUpperCase() : "PR")}</div>
-          <div>
-            <strong>{currentUser?.displayName || (role === "admin" ? "Admin User" : "Field Officer")}</strong>
-            <span>{currentUser?.email || (role === "admin" ? "Administrator" : "Offline Inspector")}</span>
+          <div className="avatar">{currentUser?.name ? currentUser.name.slice(0, 2).toUpperCase() : "OF"}</div>
+          <div style={{ minWidth: 0 }}>
+            <strong style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{currentUser?.name || currentUser?.displayName || "Field Officer"}</strong>
+            <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 10 }}>{currentUser?.phone || "Authorized Officer"}</span>
           </div>
-          <button className="icon-btn logout-btn" title="Sign out" onClick={logout}><LogOut size={16}/></button>
         </div>
       </div>
     </aside>
-    <main className="main"><Topbar page={page} offline={offline} isSyncing={isSyncing} toggleOffline={toggleOffline} savedCount={savedCount} sync={syncPendingRecords} userEmail={currentUser?.email || currentUser?.displayName}/>
+    <main className="main"><Topbar page={page} offline={offline} isSyncing={isSyncing} toggleOffline={toggleOffline} savedCount={savedCount} sync={syncPendingRecords} userEmail={currentUser?.name || currentUser?.phone || currentUser?.displayName}/>
       {offline && page !== "offline-workspace" && (
         <div style={{padding:"0 24px 0 24px",marginTop:14}}>
           <div className="offline-banner-bar">
@@ -975,7 +1000,7 @@ export default function App() {
         {page === "history" && <HistoryPage/>}
         {page === "reports" && <Reports/>}
         {page === "audit" && <Audit/>}
-        {page === "admin" && <Admin/>}
+        {page === "admin" && <AdminConsole currentUser={currentUser} onLogoutAdmin={logout} />}
       </div>
     </main>
     <div className="mobile-nav">{mobileNavItems.map(item => <button className={page === item.key ? "active" : ""} key={item.key} onClick={() => go(item.key as NavKey)}><item.icon size={18}/><span>{item.label.split(" ")[0]}</span></button>)}</div>
@@ -1033,141 +1058,6 @@ export default function App() {
         </div>
       </div>
     )}
-  </div>;
-}
-
-
-function LoginPage({ onLogin }: { onLogin: (user: AppUser) => void }) {
-  const [isSignUp, setIsSignUp] = useState(false);
-  const [user, setUser] = useState("");
-  const [pass, setPass] = useState("");
-  const [roleSelect, setRoleSelect] = useState<Role>("inspector");
-  const [showPass, setShowPass] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [err, setErr] = useState("");
-
-  const submit = async (e: FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    setErr("");
-    setLoading(true);
-    const email = user.trim().includes("@") ? user.trim() : `${user.trim()}@off2field.com`;
-    try {
-      let appUser: AppUser;
-      if (isSignUp) {
-        appUser = await authSignUp(email, pass, roleSelect);
-        toast.success("Account created successfully", { description: `Logged in as ${email}` });
-      } else {
-        appUser = await authSignIn(email, pass);
-        toast.success("Signed in successfully", { description: `Welcome back, ${email}` });
-      }
-      onLogin(appUser);
-    } catch (e: any) {
-      const code: string = e.code ?? "";
-      if (code === "auth/wrong-password" || code === "auth/invalid-credential") setErr("Incorrect password. Please try again.");
-      else if (code === "auth/user-not-found") setErr("User not found. Check email or toggle Sign Up.");
-      else if (code === "auth/email-already-in-use") setErr("Email is already registered. Please Sign In instead.");
-      else if (code === "auth/weak-password") setErr("Password must be at least 6 characters.");
-      else if (code === "auth/invalid-email") setErr("Invalid username or email format.");
-      else if (code === "auth/network-request-failed") setErr("Network error. You can still use Offline Field Mode.");
-      else setErr(e.message ?? "Authentication failed.");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleOfflineGuest = () => {
-    const guestUser: AppUser = {
-      uid: "offline-field-officer",
-      email: "field.officer@local.device",
-      role: "inspector",
-      displayName: "Field Inspector (Offline)",
-      isOfflineUser: true,
-    };
-    onLogin(guestUser);
-    toast.info("Offline Field Mode Active", {
-      description: "Inspections, checklist edits, and photos will be saved locally to IndexedDB.",
-    });
-  };
-
-  return <div className="login-shell">
-    <div className="login-wrap">
-      <div className="login-brand"><Brand/><p className="login-tagline">Field Inspection Operating System</p></div>
-      <div className="login-card">
-        <div className="login-card-header">
-          <h2>{isSignUp ? "Create Field Account" : "Sign In to OFF2FIELD"}</h2>
-          <p>{isSignUp ? "Register a new field inspector or admin profile" : "Enter your credentials to access your workspace"}</p>
-        </div>
-        <form className="login-form" onSubmit={submit}>
-          <div className="login-field">
-            <label>Username or Email</label>
-            <input
-              type="text"
-              placeholder="e.g. inspector@off2field.com"
-              value={user}
-              onChange={e => setUser(e.target.value)}
-              autoFocus
-            />
-          </div>
-          <div className="login-field">
-            <label>Password</label>
-            <div className="pass-wrap">
-              <input
-                type={showPass ? "text" : "password"}
-                placeholder="••••••••"
-                value={pass}
-                onChange={e => setPass(e.target.value)}
-              />
-              <button type="button" className="pass-toggle" onClick={() => setShowPass(v => !v)}>
-                {showPass ? <EyeOff size={14}/> : <Eye size={14}/>}
-              </button>
-            </div>
-          </div>
-
-          {isSignUp && (
-            <div className="login-field">
-              <label>Role</label>
-              <select
-                value={roleSelect}
-                onChange={e => setRoleSelect(e.target.value as Role)}
-                style={{ width: "100%", padding: "10px", borderRadius: "8px", border: "1px solid #cbd5e1", background: "white", fontSize: "14px" }}
-              >
-                <option value="inspector">Field Inspector</option>
-                <option value="admin">Supervisor / Admin</option>
-              </select>
-            </div>
-          )}
-
-          {err && <div className="login-error">{err}</div>}
-          <button type="submit" className="login-submit inspector" disabled={loading || !user || !pass}>
-            {loading && <span className="login-spinner"/>}
-            {loading ? (isSignUp ? "Creating account…" : "Signing in…") : (isSignUp ? "Create Account" : "Sign In")}
-          </button>
-
-          <div style={{ display: "flex", justifyContent: "center", marginTop: "10px" }}>
-            <button
-              type="button"
-              className="text-btn"
-              style={{ fontSize: "12px", color: "var(--brand, #0284c7)" }}
-              onClick={() => { setIsSignUp(!isSignUp); setErr(""); }}
-            >
-              {isSignUp ? "Already have an account? Sign In" : "Need an account? Create one"}
-            </button>
-          </div>
-
-          <div style={{marginTop:12,borderTop:"1px solid #e2e8f0",paddingTop:12,textAlign:"center"}}>
-            <button
-              type="button"
-              className="btn secondary"
-              style={{width:"100%",justifyContent:"center",fontSize:"12px",padding:"8px"}}
-              onClick={handleOfflineGuest}
-            >
-              <CloudOff size={14} color="#f59e0b"/> Work in Offline Field Mode (No login required)
-            </button>
-            <p style={{fontSize:10,color:"var(--muted)",marginTop:5}}>Inspect equipment, edit checklists, and take photos offline</p>
-          </div>
-        </form>
-      </div>
-    </div>
   </div>;
 }
 
@@ -2230,4 +2120,3 @@ function Conflicts({resolved,setResolved}:any){return <><PageIntro eyebrow="TRAC
 function HistoryPage(){return <><PageIntro eyebrow="TRACEABILITY / TIME MACHINE" title="Inspection history" description="A chronological record of every meaningful state change." actions={<button className="btn secondary"><Download size={15}/> Export history</button>}/><section className="panel history-panel"><div className="history-head"><div><strong>INS-2026-TN-0001</strong><span>TRF-102 · Substation A</span></div><StatusChip status="UNDER REVIEW"/></div><div className="history-timeline">{[["10:00","Inspection created","Pragatheesh","Draft created from assignment","blue"],["10:41","Temperature updated","Pragatheesh · DEV-0001","72 °C → 78 °C","amber"],["10:43","Temperature updated","Priya S. · DEV-0018","72 °C → 83 °C","purple"],["10:44","Conflict detected","Sync engine","Competing values require resolution","red"],["11:02","Supervisor resolved","Meera Nair","Final value: 80 °C","green"]].map(x=><div className="history-event" key={x[0]}><time>{x[0]}</time><div className={"history-marker " + x[4]}></div><div><strong>{x[1]}</strong><span>{x[2]}</span><p>{x[3]}</p></div><ChevronRight size={16}/></div>)}</div></section></>}
 function Reports(){return <><PageIntro eyebrow="COMPLIANCE / REPORTING" title="Reports" description="Generate official, PDF-ready views from locally available inspection records." actions={<button className="btn primary" onClick={()=>toast.success("Report ready",{description:"PDF-ready preview generated locally."})}><FileText size={15}/> Generate report</button>}/><div className="report-grid">{[["Inspection report","A complete field inspection record","12 records","FileCheck2"],["Machine history","Equipment readings over time","4 machines","History"],["Audit report","Append-only event export","86 events","FileClock"],["Conflict report","Resolution and risk register","1 conflict","AlertTriangle"],["Evidence report","Photo metadata and integrity","20 items","Archive"],["Compliance report","Department readiness summary","Q3 2026","ShieldCheck"]].map(x=><button className="report-card panel" key={x[0]} onClick={()=>toast("Report preview opened",{description:x[0]})}><div className="report-icon"><FileText size={19}/></div><div><h3>{x[0]}</h3><p>{x[1]}</p><span>{x[2]}</span></div><ArrowRight size={16}/></button>)}</div></>}
 function Audit(){return <><PageIntro eyebrow="SECURITY / APPEND-ONLY LOG" title="Audit trail" description="Every create, edit, submit, approve, and conflict action is preserved." actions={<button className="btn secondary"><Download size={15}/> Export CSV</button>}/><section className="panel audit-panel"><div className="toolbar compact"><div className="searchbox"><Search size={16}/><input placeholder="Search operation ID, user, or action"/></div><button className="btn secondary"><Filter size={15}/> All actions</button><button className="btn secondary">Last 30 days</button></div><div className="audit-table"><div className="audit-row audit-head"><span>Timestamp</span><span>User / role</span><span>Action</span><span>Field</span><span>Operation ID</span></div>{[["22 Sep · 11:02","Meera Nair · Supervisor","Conflict resolved","Oil temperature","OP-RES-9921"],["22 Sep · 10:44","Sync engine · System","Conflict created","Oil temperature","OP-CON-7F31"],["22 Sep · 10:43","Pragatheesh · Officer","Photo added","Evidence","OP-EVD-0002"],["22 Sep · 10:41","Pragatheesh · Officer","Edit","Oil temperature","OP-7F31-A9C2"],["22 Sep · 10:00","Pragatheesh · Officer","Create","Inspection","OP-INS-0001"]].map(x=><div className="audit-row" key={x[4]}><span>{x[0]}</span><strong>{x[1]}</strong><StatusChip status={x[2] === "Conflict resolved" ? "APPROVED" : "UNDER REVIEW"}/><span>{x[3]}</span><span className="mono">{x[4]}</span></div>)}</div></section></>}
-function Admin(){return <><PageIntro eyebrow="ADMINISTRATION / CONTROL PLANE" title="Admin console" description="Manage users, roles, machines, templates, devices, and schema versions." actions={<button className="btn primary" onClick={()=>toast("Admin action ready")}> <Users size={15}/> Add user</button>}/><div className="admin-grid">{[["Users & roles","18 users · 4 roles","Users"],["Machine registry","48 registered assets","Cog"],["Inspection templates","06 active templates","ClipboardCheck"],["Devices","22 managed devices","Smartphone"],["Schema versions","v1.8 current","Database"],["System settings","RBAC · security · sync","Settings2"]].map(x=><button className="admin-card panel" key={x[0]} onClick={()=>toast("Admin module opened",{description:x[0]})}><div className="admin-icon"><Settings2 size={18}/></div><div><h3>{x[0]}</h3><p>{x[1]}</p></div><ChevronRight size={16}/></button>)}</div><section className="panel security-strip"><ShieldCheck size={20}/><div><strong>Security posture</strong><span>JWT-ready architecture · HTTPS/WSS boundary · append-only audit model · no secrets in frontend</span></div><span className="ready-chip"><span></span> Healthy</span></section></>}

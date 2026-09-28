@@ -969,5 +969,241 @@ button.stat-card-btn:hover .stat-arrow{opacity:1;color:#2a7a94}
   }
 }
 
+/* ── Mobile Phone Number & OTP Verification Styles ── */
+.phone-input-container {
+  display: flex;
+  align-items: center;
+  background: #ffffff;
+  border: 1.5px solid #cbd5e1;
+  border-radius: 8px;
+  overflow: hidden;
+  transition: all 0.2s ease;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+}
+.phone-input-container:focus-within {
+  border-color: #0284c7;
+  box-shadow: 0 0 0 3px rgba(2, 132, 199, 0.15);
+}
+.phone-country-select {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 14px;
+  background: #f8fafc;
+  border-right: 1.5px solid #e2e8f0;
+  height: 46px;
+  font-family: 'DM Mono', monospace;
+  font-weight: 700;
+  font-size: 14px;
+  color: #1e293b;
+  user-select: none;
+}
+.phone-country-flag {
+  font-size: 16px;
+}
+.phone-number-input {
+  flex: 1;
+  height: 46px;
+  border: none;
+  outline: none;
+  padding: 0 14px;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  color: #0f172a;
+  background: transparent;
+  font-family: 'DM Sans', sans-serif;
+}
+.phone-number-input::placeholder {
+  color: #94a3b8;
+  font-weight: 400;
+}
 
+/* OTP 6-digit Grid */
+.otp-input-group {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  margin: 16px 0 8px;
+}
+.otp-digit-box {
+  width: 44px;
+  height: 52px;
+  text-align: center;
+  font-size: 22px;
+  font-weight: 700;
+  font-family: 'DM Mono', monospace;
+  color: #0f172a;
+  background: #f8fafc;
+  border: 1.5px solid #cbd5e1;
+  border-radius: 8px;
+  outline: none;
+  transition: all 0.18s ease;
+}
+.otp-digit-box:focus {
+  background: #ffffff;
+  border-color: #0284c7;
+  box-shadow: 0 0 0 3px rgba(2, 132, 199, 0.2);
+  transform: translateY(-2px);
+}
+.otp-digit-box.filled {
+  background: #ffffff;
+  border-color: #0369a1;
+  color: #0369a1;
+}
 
+/* Device Registration & Hardware Tag */
+.hardware-binding-tag {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: #f1f5f9;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 10px 14px;
+  margin-top: 14px;
+  font-size: 11px;
+  color: #475569;
+}
+.hardware-binding-tag strong {
+  font-family: 'DM Mono', monospace;
+  color: #0f172a;
+}
+.hardware-binding-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  background: #e2e8f0;
+  color: #334155;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+}
+
+/* Industrial Error Alert Callout */
+.auth-callout {
+  border-radius: 8px;
+  padding: 14px 16px;
+  margin-bottom: 16px;
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  animation: fadeIn 0.2s ease-out;
+}
+.auth-callout.error {
+  background: #fef2f2;
+  border: 1.5px solid #fecaca;
+  color: #991b1b;
+}
+.auth-callout.warning {
+  background: #fffbeb;
+  border: 1.5px solid #fde68a;
+  color: #92400e;
+}
+.auth-callout.info {
+  background: #f0f9ff;
+  border: 1.5px solid #bae6fd;
+  color: #0369a1;
+}
+.auth-callout-icon {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.auth-callout-content h4 {
+  font-size: 13px;
+  font-weight: 700;
+  margin: 0 0 3px;
+  font-family: 'DM Sans', sans-serif;
+}
+.auth-callout-content p {
+  font-size: 11.5px;
+  margin: 0;
+  line-height: 1.45;
+}
+
+/* Pre-created officer selector buttons for quick test */
+.quick-officers-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+  margin-top: 12px;
+}
+.quick-officer-btn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  text-align: left;
+  transition: all 0.15s ease;
+  cursor: pointer;
+}
+.quick-officer-btn:hover {
+  background: #f1f5f9;
+  border-color: #cbd5e1;
+}
+.quick-officer-btn strong {
+  font-size: 12px;
+  color: #0f172a;
+}
+.quick-officer-btn span {
+  font-size: 10px;
+  color: #64748b;
+  font-family: 'DM Mono', monospace;
+}
+.quick-officer-btn .badge-role {
+  padding: 2px 7px;
+  border-radius: 4px;
+  font-size: 9px;
+  font-weight: 700;
+  font-family: 'DM Mono', monospace;
+  background: #e0f2fe;
+  color: #0369a1;
+}
+
+/* Startup Fullscreen Splash / Loader */
+.startup-splash-shell {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: #0f172a;
+  color: #ffffff;
+  padding: 24px;
+  font-family: 'DM Sans', sans-serif;
+  text-align: center;
+}
+.startup-brand-symbol {
+  width: 48px;
+  height: 48px;
+  background: #1e3a5f;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 4px;
+  padding: 8px;
+  transform: skew(-10deg);
+  border-radius: 4px;
+  margin-bottom: 16px;
+  box-shadow: 0 0 24px rgba(56, 189, 248, 0.3);
+}
+.startup-brand-symbol span {
+  width: 6px;
+  background: #38bdf8;
+  display: block;
+}
+.startup-brand-symbol span:nth-child(1) { height: 12px; }
+.startup-brand-symbol span:nth-child(2) { height: 24px; }
+.startup-brand-symbol span:nth-child(3) { height: 18px; }
+.startup-loader-spinner {
+  width: 22px;
+  height: 22px;
+  border: 2.5px solid rgba(255, 255, 255, 0.2);
+  border-top-color: #38bdf8;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  margin-top: 18px;
+}

@@ -123,12 +123,19 @@ export async function pullInitialCloudData(userId: string): Promise<CloudSyncRes
       message: `Cloud sync complete: ${pulledInspections} inspections pulled, ${pulledEvidence} evidence items synced, ${conflictsResolved} conflicts updated.`,
     };
   } catch (err: any) {
-    console.error("Cloud data pull failed:", err);
+    const isMissingDb = err?.message?.includes("Database '(default)' not found") || err?.code === "not-found";
+    if (isMissingDb) {
+      console.info("[CloudSync] Cloud Firestore database is not yet created in Firebase Console. Operating in offline Dexie mode.");
+    } else {
+      console.error("Cloud data pull failed:", err);
+    }
     return {
       pulledInspections: 0,
       pulledEvidence: 0,
       conflictsResolved: 0,
-      message: `Cloud pull error: ${err?.message || "Failed to fetch cloud data"}`,
+      message: isMissingDb
+        ? "Firestore database not yet initialized in Firebase Console. Working locally in Dexie IndexedDB."
+        : `Cloud pull error: ${err?.message || "Failed to fetch cloud data"}`,
     };
   }
 }
