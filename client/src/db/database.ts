@@ -77,10 +77,41 @@ export interface EvidenceRecord {
   syncedAt?: string;
 }
 
+export interface FindingRecord {
+  id: string;
+  inspectionId: string;
+  assetId: string;
+  title: string;
+  severity: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
+  location?: string;
+  evidenceId?: string;
+  remark: string;
+  status: "OPEN" | "IN_PROGRESS" | "RESOLVED";
+  createdAt: string;
+  updatedAt?: string;
+}
+
+export interface AuditEventRecord {
+  id: string;
+  timestamp: string;
+  action: string;
+  user: string;
+  assetId?: string;
+  inspectionId?: string;
+  details?: string;
+  isOffline: boolean;
+}
+
 class Off2FieldDatabase extends Dexie {
   inspections!: Table<InspectionRecord, string>;
   syncQueue!: Table<SyncQueueItem, string>;
   evidence!: Table<EvidenceRecord, string>;
+  facilities!: Table<any, string>;
+  equipmentTypes!: Table<any, string>;
+  equipmentAssets!: Table<any, string>;
+  inspectionTemplates!: Table<any, string>;
+  findings!: Table<FindingRecord, string>;
+  auditEvents!: Table<AuditEventRecord, string>;
 
   constructor() {
     super("Off2FieldDB");
@@ -98,6 +129,18 @@ class Off2FieldDatabase extends Dexie {
       inspections: "id, status, syncStatus, updatedAt",
       syncQueue: "id, entityId, operationType, status, createdAt, updatedAt",
       evidence: "id, inspectionId, syncStatus, createdAt, updatedAt",
+    });
+
+    this.version(4).stores({
+      inspections: "id, machine, site, status, syncStatus, updatedAt",
+      syncQueue: "id, entityId, operationType, status, createdAt, updatedAt",
+      evidence: "id, inspectionId, syncStatus, createdAt, updatedAt",
+      facilities: "id, name, division, region, facilityType",
+      equipmentTypes: "id, category, name, templateId",
+      equipmentAssets: "id, assetCode, equipmentTypeId, facilityId, manufacturer, healthStatus, qrCode",
+      inspectionTemplates: "id, equipmentTypeId, category, version",
+      findings: "id, inspectionId, assetId, severity, status, createdAt",
+      auditEvents: "id, timestamp, action, user, assetId, inspectionId",
     });
   }
 }

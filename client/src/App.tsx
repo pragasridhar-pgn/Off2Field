@@ -53,9 +53,25 @@ import {
 import { QRScannerModal } from "./components/QRScannerModal";
 import { CameraCaptureModal } from "./components/CameraCaptureModal";
 import { MachineReferenceGuides } from "./components/MachineReferenceGuides";
+import { InspectorProfilePanel } from "./components/InspectorProfilePanel";
+import { NewInspectionWizard } from "./components/NewInspectionWizard";
+import { EquipmentInspectionWorkspace } from "./components/EquipmentInspectionWorkspace";
+import { OfflineFieldPackCard } from "./components/OfflineFieldPackCard";
+import {
+  seedEquipmentMasterDataIfEmpty,
+  getAssetByCodeOrId,
+  searchEquipmentAssets,
+} from "./db/equipmentStorage";
+import {
+  SEED_EQUIPMENT_ASSETS,
+  GOVERNMENT_FACILITIES,
+  getTemplateForEquipmentType,
+  type EquipmentAsset,
+  type GovernmentFacility,
+  type EquipmentInspectionTemplate,
+} from "./data/equipmentCatalog";
 
-
-type NavKey = "dashboard" | "inspections" | "workspace" | "offline-workspace" | "machines" | "scanner" | "evidence" | "sync" | "conflicts" | "history" | "reports" | "audit" | "admin";
+type NavKey = "dashboard" | "new-inspection" | "inspections" | "workspace" | "offline-workspace" | "machines" | "scanner" | "evidence" | "sync" | "conflicts" | "history" | "reports" | "audit" | "admin";
 type Status = "DRAFT" | "SUBMITTED" | "PENDING" | "UNDER REVIEW" | "APPROVED";
 type Role = UserRole;
 
@@ -274,6 +290,11 @@ export default function App() {
   const pendingQueue = queueItems.filter(item => item.status === "PENDING" || item.status === "FAILED");
   const savedCount = pendingQueue.length;
 
+  const [activeAsset, setActiveAsset] = useState<EquipmentAsset | null>(() => SEED_EQUIPMENT_ASSETS[0]);
+  const [activeFacility, setActiveFacility] = useState<GovernmentFacility>(() => GOVERNMENT_FACILITIES[0]);
+  const [activeTemplate, setActiveTemplate] = useState<EquipmentInspectionTemplate>(() => getTemplateForEquipmentType(SEED_EQUIPMENT_ASSETS[0].equipmentTypeId));
+  const [activeInspectionType, setActiveInspectionType] = useState<"Routine" | "Periodic" | "Special" | "Emergency" | "Follow-up">("Routine");
+
   const refreshEvidence = async () => {
     try {
       const items = await seedInitialEvidenceIfEmpty();
@@ -299,6 +320,7 @@ export default function App() {
   };
 
   useEffect(() => {
+    seedEquipmentMasterDataIfEmpty();
     refreshQueue();
     refreshEvidence();
   }, []);
@@ -314,20 +336,55 @@ export default function App() {
 
   const [showQRScanner, setShowQRScanner] = useState(false);
   const [showCameraModal, setShowCameraModal] = useState(false);
+  const [showProfilePanel, setShowProfilePanel] = useState(false);
 
-  const handleQRScanSuccess = (scannedVal: string) => {
+  const launchEquipmentInspection = (
+    asset: EquipmentAsset,
+    facility?: GovernmentFacility,
+    template?: EquipmentInspectionTemplate,
+    inspectionType?: "Routine" | "Periodic" | "Special" | "Emergency" | "Follow-up"
+  ) => {
+    const nextNum = inspectionsList.length + 1;
+    const newId = `INS-2026-TN-00${nextNum < 10 ? '0' + nextNum : nextNum}`;
+    const resolvedFacility = facility || GOVERNMENT_FACILITIES.find(f => f.id === asset.facilityId) || GOVERNMENT_FACILITIES[0];
+    const resolvedTemplate = template || getTemplateForEquipmentType(asset.equipmentTypeId);
+    const resolvedType = inspectionType || "Routine";
+
+    setActiveInspectionId(newId);
+    setActiveAsset(asset);
+    setActiveFacility(resolvedFacility);
+    setActiveTemplate(resolvedTemplate);
+    setActiveInspectionType(resolvedType);
+    setSelectedMachineKey(asset.assetCode);
+    setManualMachineCode(asset.assetCode);
+    setInspectionStatus("DRAFT");
+    setSubmittedAt(null);
+    setPage("workspace");
+  };
+
+  const handleQRScanSuccess = async (scannedVal: string) => {
     setShowQRScanner(false);
     const trimmed = scannedVal.trim();
+    const matched = await getAssetByCodeOrId(trimmed);
+    if (matched) {
+      toast.success("QR Equipment Verified", {
+        description: `Asset identified: ${matched.assetCode} (${matched.name}). Starting inspection checklist.`,
+      });
+      launchEquipmentInspection(matched);
+      return;
+    }
+
     // Check if scanned value matches any known machine code (e.g. TRF-102, PMP-301)
     const match = Object.keys(machineTemplates).find(
       k => k.toLowerCase() === trimmed.toLowerCase() || trimmed.toUpperCase().includes(k)
     );
     const targetKey = match || (trimmed.length <= 15 ? trimmed.toUpperCase() : "TRF-102");
+    const fallbackAsset = (await getAssetByCodeOrId(targetKey)) || SEED_EQUIPMENT_ASSETS[0];
 
     toast.success("QR Code Verified", {
-      description: `Asset identified: ${targetKey}. Starting inspection workspace.`,
+      description: `Asset identified: ${fallbackAsset.assetCode}. Starting inspection workspace.`,
     });
-    startNewInspection(targetKey);
+    launchEquipmentInspection(fallbackAsset);
   };
 
   const handleCameraPhotoConfirm = async (data: { blob: Blob; fileName: string; dataUrl: string }) => {
@@ -640,17 +697,23 @@ export default function App() {
     await refreshQueue();
     toast.success("Sync Queue reset to default operations (Inspection A, B, C)");
   };
-  const sync = () => syncPendingRecords();
   const openInspection = async (id?: string) => {
     if (id) {
       setActiveInspectionId(id);
       const match = inspectionsList.find(x => x.id === id);
+      const machineCode = match?.machine || "TRF-102";
+      const asset = (await getAssetByCodeOrId(machineCode)) || SEED_EQUIPMENT_ASSETS[0];
+      const facility = GOVERNMENT_FACILITIES.find(f => f.id === asset.facilityId) || GOVERNMENT_FACILITIES[0];
+      const template = getTemplateForEquipmentType(asset.equipmentTypeId);
+
+      setActiveAsset(asset);
+      setActiveFacility(facility);
+      setActiveTemplate(template);
+      setActiveInspectionType("Routine");
+      setSelectedMachineKey(asset.assetCode);
+      setManualMachineCode(asset.assetCode);
       if (match) {
         setInspectionStatus(match.status as Status);
-        if (machineTemplates[match.machine]) {
-          setSelectedMachineKey(match.machine);
-          setManualMachineCode(match.machine);
-        }
       }
       try {
         const record = await getInspection(id);
@@ -664,62 +727,19 @@ export default function App() {
       } catch (err) {
         console.error("Failed to load inspection from IndexedDB:", err);
       }
+      go("workspace");
+    } else {
+      go("new-inspection");
     }
-    go("workspace");
   };
 
-  const startNewInspection = (machineKey?: string) => {
-    const nextNum = inspectionsList.length + 1;
-    const newId = `INS-2026-TN-00${nextNum < 10 ? '0' + nextNum : nextNum}`;
-    const targetKey = machineKey || "TRF-102";
-    setActiveInspectionId(newId);
-    setSelectedMachineKey(targetKey);
-    setManualMachineCode(targetKey);
-    setInspectionStatus("DRAFT");
-    setSubmittedAt(null);
-    const initialChecklist = machineTemplates[targetKey]?.checklist || [];
-    if (machineTemplates[targetKey]) {
-      setChecklist(initialChecklist);
+  const startNewInspection = async (machineKey?: string) => {
+    if (!machineKey) {
+      go("new-inspection");
+      return;
     }
-    setInspectionsList(prev => [
-      { id: newId, machine: targetKey, site: machineTemplates[targetKey]?.location.split("·")[0].trim() || "Field Site", status: "DRAFT", priority: "HIGH", date: "Today", completion: "0%" },
-      ...prev
-    ]);
-
-    const now = new Date().toISOString();
-    saveInspection({
-      id: newId,
-      status: "DRAFT",
-      checklist: initialChecklist,
-      resolved: false,
-      syncStatus: "PENDING",
-      createdAt: now,
-      updatedAt: now,
-    }).catch(err => console.error("Failed to save new inspection in IndexedDB:", err));
-
-    enqueueSyncItem({
-      entityId: newId,
-      entityName: `Inspection ${String.fromCharCode(65 + ((inspectionsList.length) % 26))}`,
-      operationType: "CREATE_INSPECTION",
-      title: `Create ${newId} (${targetKey})`,
-      machine: targetKey,
-      site: machineTemplates[targetKey]?.location.split("·")[0].trim() || "Field Site",
-      status: "PENDING",
-      payload: {
-        id: newId,
-        machine: targetKey,
-        status: "DRAFT",
-        checklist: initialChecklist,
-        createdAt: now,
-      },
-    }).then(async () => {
-      await refreshQueue();
-      if (!offline && currentUser && !currentUser.isOfflineUser) {
-        syncPendingRecords();
-      }
-    }).catch(err => console.error("Failed to enqueue in IndexedDB:", err));
-
-    go("workspace");
+    const asset = (await getAssetByCodeOrId(machineKey)) || SEED_EQUIPMENT_ASSETS[0];
+    launchEquipmentInspection(asset);
   };
 
   const handleCaptureEvidence = async (fileOrDataUrl?: { file?: File; dataUrl?: string; name?: string; title?: string }) => {
@@ -964,13 +984,32 @@ export default function App() {
         </div>
       )}
       <div className="sidebar-bottom">
-        <div className="profile">
-          <div className="avatar">{currentUser?.name ? currentUser.name.slice(0, 2).toUpperCase() : "OF"}</div>
-          <div style={{ minWidth: 0 }}>
-            <strong style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{currentUser?.name || currentUser?.displayName || "Field Officer"}</strong>
-            <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 10 }}>{currentUser?.phone || "Authorized Officer"}</span>
+        <button
+          type="button"
+          className="profile-btn"
+          onClick={() => {
+            setShowProfilePanel(true);
+            setMobileOpen(false);
+          }}
+          aria-label="Open Field Inspector Profile"
+        >
+          <div className="avatar">
+            {currentUser?.name
+              ? currentUser.name
+                  .trim()
+                  .split(/\s+/)
+                  .map(w => w[0])
+                  .join("")
+                  .slice(0, 2)
+                  .toUpperCase()
+              : "FI"}
           </div>
-        </div>
+          <div className="profile-info">
+            <strong>{currentUser?.name || currentUser?.displayName || "Mohammed Sameer"}</strong>
+            <span>{currentUser?.role === "admin" ? "System Administrator" : currentUser?.role || "Field Inspector"}</span>
+          </div>
+          <ChevronRight size={15} className="profile-chevron" />
+        </button>
       </div>
     </aside>
     <main className="main"><Topbar page={page} offline={offline} isSyncing={isSyncing} toggleOffline={toggleOffline} savedCount={savedCount} sync={syncPendingRecords} userEmail={currentUser?.name || currentUser?.phone || currentUser?.displayName}/>
@@ -989,13 +1028,52 @@ export default function App() {
       )}
       <div className="content">
         {page === "dashboard" && <Dashboard go={go} offline={offline} savedCount={savedCount} openInspection={openInspection} onOpenScanner={() => setShowQRScanner(true)}/>}
+        {page === "new-inspection" && (
+          <NewInspectionWizard
+            currentUser={currentUser}
+            offline={offline}
+            onStartInspection={({ asset, facility, inspectionType, template }) => {
+              launchEquipmentInspection(asset, facility, template, inspectionType);
+            }}
+            onOpenQRScanner={() => setShowQRScanner(true)}
+          />
+        )}
         {page === "inspections" && <Inspections openInspection={openInspection} startNewInspection={startNewInspection} inspectionsList={inspectionsList}/>}
-        {page === "workspace" && <Workspace status={inspectionStatus} setStatus={setInspectionStatus} transitionLifecycle={transitionLifecycle} checklist={checklist} setChecklist={setChecklist} saveEdit={saveEdit} offline={offline} go={go} resolved={resolved} setResolved={setResolved} selectedMachineKey={selectedMachineKey} setSelectedMachineKey={setSelectedMachineKey} manualMachineCode={manualMachineCode} setManualMachineCode={setManualMachineCode} activeInspectionId={activeInspectionId} submittedAt={submittedAt} onSubmitClick={handleInspectionSubmit} savedCount={savedCount} onCaptureEvidence={handleCaptureEvidence} evidenceList={evidenceList} onOpenLiveCamera={() => setShowCameraModal(true)} onDeleteEvidence={async (id: string) => { await deleteEvidenceLocally(id); const evs = await getAllEvidence(); setEvidenceList(evs); await refreshQueue(); toast("Evidence deleted from IndexedDB"); }} onSyncEvidence={async (item: any) => { const matchingQ = queueItems.find(q => q.entityId === item.id || q.payload?.id === item.id); if (matchingQ) { await syncSingleItem(matchingQ.id); } else if (item.queueItemId) { await syncSingleItem(item.queueItemId); } else { await syncPendingRecords(); } }}/>}
+        {page === "workspace" && (
+          <EquipmentInspectionWorkspace
+            asset={activeAsset || SEED_EQUIPMENT_ASSETS[0]}
+            facility={activeFacility || GOVERNMENT_FACILITIES[0]}
+            template={activeTemplate || getTemplateForEquipmentType(activeAsset?.equipmentTypeId)}
+            inspectionType={activeInspectionType}
+            currentUser={currentUser}
+            offline={offline}
+            onBack={() => setPage("dashboard")}
+            onOpenLiveCamera={() => setShowCameraModal(true)}
+            evidenceList={evidenceList}
+            onSubmitComplete={({ inspectionId, overallResult }) => {
+              refreshQueue();
+              setInspectionStatus(overallResult === "PASS" ? "APPROVED" : "SUBMITTED");
+              setShowSubmittedModal(true);
+              setInspectionsList(prev => [
+                {
+                  id: inspectionId,
+                  machine: activeAsset?.assetCode || manualMachineCode || "TRF-102",
+                  site: activeFacility?.name || activeAsset?.locationName || "Substation A",
+                  status: overallResult === "PASS" ? "APPROVED" : "SUBMITTED",
+                  priority: overallResult === "CRITICAL" ? "HIGH" : "MEDIUM",
+                  date: "Today",
+                  completion: "100%",
+                },
+                ...prev.filter(x => x.id !== inspectionId)
+              ]);
+            }}
+          />
+        )}
         {page === "offline-workspace" && <OfflineWorkspace go={go} refreshQueue={refreshQueue} setInspectionsList={setInspectionsList} onOpenLiveCamera={() => setShowCameraModal(true)} onSubmitted={(newId: string) => { setActiveInspectionId(newId); setInspectionStatus("SUBMITTED"); setShowSubmittedModal(true); }} />}
         {page === "machines" && <Machines go={go} startNewInspection={startNewInspection} onOpenScanner={() => setShowQRScanner(true)}/>}
         {page === "scanner" && <Scanner go={go} startNewInspection={startNewInspection} onOpenLiveScanner={() => setShowQRScanner(true)}/>}
         {page === "evidence" && <Evidence evidenceList={evidenceList} savedCount={savedCount} onCaptureEvidence={handleCaptureEvidence} onOpenLiveCamera={() => setShowCameraModal(true)} onDeleteEvidence={async (id: string) => { await deleteEvidenceLocally(id); const evs = await getAllEvidence(); setEvidenceList(evs); await refreshQueue(); toast("Evidence deleted from IndexedDB"); }} onSyncEvidence={async (item: any) => { const matchingQ = queueItems.find(q => q.entityId === item.id || q.payload?.id === item.id); if (matchingQ) { await syncSingleItem(matchingQ.id); } else if (item.queueItemId) { await syncSingleItem(item.queueItemId); } else { await syncPendingRecords(); } }} offline={offline}/>}
-        {page === "sync" && <SyncCenter queueItems={queueItems} pendingCount={savedCount} sync={sync} syncSingleItem={syncSingleItem} enqueueTestOperation={enqueueCustomOperation} clearCompleted={clearCompleted} resetDefaultQueue={resetDefaultQueue} isSyncing={isSyncing} offline={offline}/>}
+        {page === "sync" && <SyncCenter queueItems={queueItems} pendingCount={savedCount} sync={syncPendingRecords} syncSingleItem={syncSingleItem} enqueueTestOperation={enqueueCustomOperation} clearCompleted={clearCompleted} resetDefaultQueue={resetDefaultQueue} isSyncing={isSyncing} offline={offline}/>}
         {page === "conflicts" && <Conflicts resolved={resolved} setResolved={setResolved}/>}
         {page === "history" && <HistoryPage/>}
         {page === "reports" && <Reports/>}
@@ -1004,6 +1082,29 @@ export default function App() {
       </div>
     </main>
     <div className="mobile-nav">{mobileNavItems.map(item => <button className={page === item.key ? "active" : ""} key={item.key} onClick={() => go(item.key as NavKey)}><item.icon size={18}/><span>{item.label.split(" ")[0]}</span></button>)}</div>
+
+    {/* ── Field Inspector Profile Panel ── */}
+    <InspectorProfilePanel
+      isOpen={showProfilePanel}
+      onClose={() => setShowProfilePanel(false)}
+      currentUser={currentUser}
+      savedCount={savedCount}
+      onLogoutConfirm={logout}
+      onSyncNow={syncPendingRecords}
+      onUserUpdated={(updated) => {
+        setCurrentUser(updated);
+      }}
+      onOpenSettings={() => {
+        setShowProfilePanel(false);
+        if (currentUser?.role === "admin" || currentUser?.role === "Admin") {
+          go("admin");
+        } else {
+          toast.info("Inspection Settings & Preferences", {
+            description: "Telemetry, camera modes, and offline caches are active.",
+          });
+        }
+      }}
+    />
 
     {/* ── Real QR Scanner Camera Modal ── */}
     <QRScannerModal
@@ -1066,14 +1167,14 @@ function Brand({ compact = false }: { compact?: boolean }) { return <div classNa
 function NavItem({ item, active, onClick, badge }: any) { return <button className={"nav-item " + (active ? "active" : "")} onClick={onClick}><item.icon size={17}/><span>{item.label}</span>{badge !== undefined && <em>{badge}</em>}</button> }
 function Connection({ offline, onClick }: { offline: boolean; onClick: () => void }) { return <button onClick={onClick} className={"connection " + (offline ? "is-offline" : "")}><span className="status-dot"></span>{offline ? "OFFLINE" : "ONLINE"}<ChevronRight size={13}/></button> }
 function Topbar({ page, offline, isSyncing, toggleOffline, savedCount, sync, userEmail }: any) {
-  const title = page === "workspace" ? "Inspection workspace" : page === "dashboard" ? "Operations overview" : nav.find(n => n.key === page)?.label;
+  const title = page === "workspace" ? "Equipment Inspection Workspace" : page === "new-inspection" ? "New Electrical Equipment Inspection" : page === "dashboard" ? "Operations Overview" : nav.find(n => n.key === page)?.label;
   return (
     <div className="topbar">
       <div><h1>{title}</h1></div>
       <div className="top-actions">
         {/* Review status indicator area */}
         <div style={{ display: "flex", gap: "6px", alignItems: "center", fontSize: "11px", background: "rgba(15, 23, 42, 0.05)", padding: "5px 10px", borderRadius: "6px" }}>
-          <span style={{ color: "var(--muted, #64748b)" }}>User: <strong style={{ color: "var(--ink, #0f172a)" }}>{userEmail || "Field Officer"}</strong></span>
+          <span style={{ color: "var(--muted, #64748b)" }}>Officer: <strong style={{ color: "var(--ink, #0f172a)" }}>{userEmail || "Field Officer"}</strong></span>
           <span style={{ color: "#cbd5e1" }}>|</span>
           <span style={{ color: offline ? "#d97706" : "#16a34a", fontWeight: 700 }}>{offline ? "OFFLINE" : "ONLINE"}</span>
           <span style={{ color: "#cbd5e1" }}>|</span>
@@ -1093,7 +1194,102 @@ function Topbar({ page, offline, isSyncing, toggleOffline, savedCount, sync, use
 }
 
 function PageIntro({ eyebrow, title, description, actions }: any) { return <div className="page-intro"><div><div className="eyebrow">{eyebrow}</div><h2>{title}</h2><p>{description}</p></div><div className="intro-actions">{actions}</div></div> }
-function Dashboard({ go, offline, savedCount, openInspection }: any) { return <><div className="dash-actions"><button className="btn secondary" onClick={() => go("scanner")}><QrCode size={16}/> Scan machine</button><button className="btn primary" onClick={() => openInspection()}><PlusIcon/> Start inspection</button></div><div className="stat-grid">{[["Assigned inspections","12","+2 this week","blue",ClipboardCheck,"inspections"],["In progress","03","2 due today","amber",Activity,"inspections"],["Submitted","08","+4 this week","green",Send,"inspections"],["Pending review","04","Supervisor queue","violet",Clock3,"inspections"],["Conflicts","01","Needs resolution","red",AlertTriangle,"conflicts"],["Approved","27","92% acceptance","teal",CheckCircle2,"history"]].map(([label,value,sub,color,Icon,dest]: any[]) => <button className="stat-card stat-card-btn" key={label as string} onClick={() => go(dest)}><div className={"stat-icon " + color}><Icon size={17}/></div><div className="stat-copy"><span>{label}</span><strong>{value}</strong><small className={color === "red" ? "danger-text" : ""}>{sub}</small></div><ChevronRight size={14} className="muted-icon stat-arrow"/></button>)}</div><div className="dashboard-grid"><section className="panel readiness"><PanelHeader title="Offline readiness" icon={<Wifi size={17}/>} action={<span className="ready-chip"><span></span> Device ready</span>}/><div className="readiness-body"><div className="readiness-score"><div className="score-ring"><strong>100</strong><span>%</span></div><div><strong>READY FOR<br/>OFFLINE WORK</strong><small>All field dependencies are cached</small></div></div><div className="checks">{["App available offline","Assignments downloaded","Machine data available","Templates available","Permissions cached","Storage available"].map(x => <div key={x}><CheckCircle2 size={16}/><span>{x}</span><small>Verified</small></div>)}</div></div></section><section className="panel workload"><PanelHeader title="Today’s workload" icon={<BarChart3 size={17}/>} action={<button className="text-btn" onClick={() => go("inspections")}>View all <ArrowRight size={14}/></button>}/><div className="workload-rows">{[["INS-2026-TN-0001","TRF-102 · Substation A","High","2h 14m","high"],["INS-2026-TN-0002","TRF-117 · Substation B","Medium","5h 08m","medium"],["INS-2026-TN-0003","PMP-301 · Pump House 4","Low","Tomorrow","low"]].map((x, i) => <button className="work-row" onClick={() => openInspection(x[0])} key={x[0]}><div className="work-index">0{i+1}</div><div className="work-main"><strong>{x[0]}</strong><span>{x[1]}</span></div><span className={"priority " + x[4]}>{x[2]}</span><div className="work-time"><Clock3 size={13}/>{x[3]}</div><ChevronRight size={15}/></button>)}</div></section></div><div className="lower-grid"><section className="panel activity-panel"><PanelHeader title="Recent activity" icon={<Activity size={17}/>} action={<button className="text-btn" onClick={() => go("audit")}>Audit trail <ArrowRight size={14}/></button>}/><Timeline items={[["Inspection created","INS-2026-TN-0001","Pragatheesh","10:00","blue"],["Checklist updated","Oil Temperature · 78 °C","Saved locally","10:41","amber"],["Photo evidence added","EVD-2026-00001","TRF-102 / Item 04","10:43","purple"],["Conflict detected","Temperature value","Sync queue","10:44","red"]]}/></section><section className="panel sync-panel"><PanelHeader title="Sync health" icon={<RefreshCw size={17}/>} action={<button className="icon-btn"><MoreHorizontal size={17}/></button>}/><div className="sync-health"><div className="health-number"><strong>98.4<span>%</span></strong><small>Successful operations</small></div><div className="health-bars">{Array.from({length: 18}).map((_,i)=><i key={i} style={{height: `${18 + ((i*17)%60)}%`}}></i>)}</div></div><div className="sync-meta"><div><span className="dot green-dot"></span>Last sync <strong>Today, 09:58</strong></div><div><span className="dot amber-dot"></span>{offline ? "Offline queue" : "Pending changes"} <strong>{savedCount} operations</strong></div></div></section></div></> }
+function Dashboard({ go, offline, savedCount, openInspection, onOpenScanner }: any) {
+  return (
+    <>
+      {/* ── Primary Government Inspection Hero Banner ── */}
+      <div className="new-inspection-hero-banner" onClick={() => go("new-inspection")}>
+        <div className="hero-banner-content">
+          <div className="hero-banner-icon">
+            <Sparkles size={28} />
+          </div>
+          <div>
+            <div className="hero-banner-eyebrow">GOVERNMENT ELECTRICAL EQUIPMENT INSPECTION</div>
+            <h3>+ START NEW FIELD INSPECTION</h3>
+            <p>Select government facility, search electrical equipment catalog, and load equipment-specific test template 100% offline.</p>
+          </div>
+        </div>
+        <button className="btn primary hero-banner-btn" onClick={(e) => { e.stopPropagation(); go("new-inspection"); }}>
+          Launch Wizard <ArrowRight size={16}/>
+        </button>
+      </div>
+
+      <div className="dash-actions" style={{marginTop: 16}}>
+        <button className="btn secondary" onClick={onOpenScanner}><QrCode size={16}/> Scan Equipment QR</button>
+        <button className="btn primary" onClick={() => go("new-inspection")}><PlusIcon/> New Inspection</button>
+      </div>
+
+      <div className="stat-grid">
+        {[
+          ["Assigned inspections","12","+2 this week","blue",ClipboardCheck,"inspections"],
+          ["In progress","03","2 due today","amber",Activity,"inspections"],
+          ["Submitted","08","+4 this week","green",Send,"inspections"],
+          ["Pending review","04","Supervisor queue","violet",Clock3,"inspections"],
+          ["Conflicts","01","Needs resolution","red",AlertTriangle,"conflicts"],
+          ["Approved","27","92% acceptance","teal",CheckCircle2,"history"]
+        ].map(([label,value,sub,color,Icon,dest]: any[]) => (
+          <button className="stat-card stat-card-btn" key={label as string} onClick={() => go(dest)}>
+            <div className={"stat-icon " + color}><Icon size={17}/></div>
+            <div className="stat-copy">
+              <span>{label}</span>
+              <strong>{value}</strong>
+              <small className={color === "red" ? "danger-text" : ""}>{sub}</small>
+            </div>
+            <ChevronRight size={14} className="muted-icon stat-arrow"/>
+          </button>
+        ))}
+      </div>
+
+      <div className="dashboard-grid">
+        {/* ── Functional Offline Readiness & Field Pack Widget ── */}
+        <OfflineFieldPackCard onStartInspection={() => go("new-inspection")} />
+
+        <section className="panel workload">
+          <PanelHeader title="Today’s inspection workload" icon={<BarChart3 size={17}/>} action={<button className="text-btn" onClick={() => go("inspections")}>View all <ArrowRight size={14}/></button>}/>
+          <div className="workload-rows">
+            {[
+              ["INS-2026-TN-0001","TRF-102 · Substation A","High","2h 14m","high"],
+              ["INS-2026-TN-0002","TRF-117 · Substation B","Medium","5h 08m","medium"],
+              ["INS-2026-TN-0003","PMP-301 · Pump House 4","Low","Tomorrow","low"]
+            ].map((x, i) => (
+              <button className="work-row" onClick={() => openInspection(x[0])} key={x[0]}>
+                <div className="work-index">0{i+1}</div>
+                <div className="work-main"><strong>{x[0]}</strong><span>{x[1]}</span></div>
+                <span className={"priority " + x[4]}>{x[2]}</span>
+                <div className="work-time"><Clock3 size={13}/>{x[3]}</div>
+                <ChevronRight size={15}/>
+              </button>
+            ))}
+          </div>
+        </section>
+      </div>
+
+      <div className="lower-grid">
+        <section className="panel activity-panel">
+          <PanelHeader title="Recent activity" icon={<Activity size={17}/>} action={<button className="text-btn" onClick={() => go("audit")}>Audit trail <ArrowRight size={14}/></button>}/>
+          <Timeline items={[
+            ["Inspection created","INS-2026-TN-0001","Pragatheesh","10:00","blue"],
+            ["Checklist updated","Oil Temperature · 78 °C","Saved locally","10:41","amber"],
+            ["Photo evidence added","EVD-2026-00001","TRF-102 / Item 04","10:43","purple"],
+            ["Conflict detected","Temperature value","Sync queue","10:44","red"]
+          ]}/>
+        </section>
+
+        <section className="panel sync-panel">
+          <PanelHeader title="Sync health" icon={<RefreshCw size={17}/>} action={<button className="icon-btn"><MoreHorizontal size={17}/></button>}/>
+          <div className="sync-health">
+            <div className="health-number"><strong>98.4<span>%</span></strong><small>Successful operations</small></div>
+            <div className="health-bars">{Array.from({length: 18}).map((_,i)=><i key={i} style={{height: `${18 + ((i*17)%60)}%`}}></i>)}</div>
+          </div>
+          <div className="sync-meta">
+            <div><span className="dot green-dot"></span>Last sync <strong>Today, 09:58</strong></div>
+            <div><span className="dot amber-dot"></span>{offline ? "Offline queue" : "Pending changes"} <strong>{savedCount} operations</strong></div>
+          </div>
+        </section>
+      </div>
+    </>
+  );
+}
 function PanelHeader({ title, icon, action }: any) { return <div className="panel-header"><div><span className="panel-icon">{icon}</span><h3>{title}</h3></div>{action}</div> }
 function Timeline({ items }: any) { return <div className="timeline">{items.map((x: any) => <div className="timeline-item" key={x[1]}><div className={"timeline-dot " + x[4]}></div><div><strong>{x[0]}</strong><span>{x[1]}</span><small>{x[2]}</small></div><time>{x[3]}</time></div>)}</div> }
 function PlusIcon(){return <span className="plus-icon">+</span>}

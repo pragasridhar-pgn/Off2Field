@@ -80,4 +80,26 @@ describe("Firebase Phone OTP Authentication & Session Tests", () => {
       expect(getCachedUser()).toBeNull();
     });
   });
+
+  describe("3. Indian Mobile Number & Password Verification Login", () => {
+    it("Authenticates registered government officer with correct password", async () => {
+      const user = await import("./authService").then(m => m.signInWithPhonePassword("9842635574", "123456"));
+      expect(user).toBeDefined();
+      expect(user.phone).toBe("+919842635574");
+      expect(user.name).toBe("Mohammed Sameer");
+      expect(user.role).toBe("Field Inspector");
+    });
+
+    it("Denies access when incorrect password is provided", async () => {
+      await expect(
+        import("./authService").then(m => m.signInWithPhonePassword("9842635574", "wrong"))
+      ).rejects.toThrow();
+    });
+
+    it("Rejects unregistered phone numbers", async () => {
+      await expect(
+        import("./authService").then(m => m.signInWithPhonePassword("9999999999", "123456"))
+      ).rejects.toThrow("Mobile number or password is incorrect.");
+    });
+  });
 });

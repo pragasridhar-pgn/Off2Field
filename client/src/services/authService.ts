@@ -11,6 +11,10 @@ import {
   getDoc,
   setDoc,
   updateDoc,
+  collection,
+  query,
+  where,
+  getDocs,
 } from "firebase/firestore";
 import { auth, db } from "../firebase/firebaseConfig";
 
@@ -31,8 +35,11 @@ export interface AppUser {
   name?: string;
   role: UserRole;
   employeeId?: string;
+  department?: string;
   organizationId?: string;
+  organizationName?: string;
   siteId?: string;
+  siteName?: string;
   assignedDeviceId?: string;
   status?: string;
   createdAt: string;
@@ -126,58 +133,168 @@ export function setupRecaptchaVerifier(
   return verifier;
 }
 
+export interface GovernmentOfficerPreset {
+  phone: string;
+  name: string;
+  role: UserRole;
+  employeeId: string;
+  department: string;
+  siteName: string;
+  defaultPass: string;
+}
+
+export const REGISTERED_GOVERNMENT_OFFICERS: GovernmentOfficerPreset[] = [
+  {
+    phone: "+919842635574",
+    name: "Mohammed Sameer",
+    role: "Field Inspector",
+    employeeId: "INS-2026-001",
+    department: "Tamil Nadu Electricity Board (TNEB)",
+    siteName: "230 kV Coimbatore Central Substation",
+    defaultPass: "123456",
+  },
+  {
+    phone: "+919876543210",
+    name: "Pragatheesh S.",
+    role: "Field Inspector",
+    employeeId: "INS-2026-002",
+    department: "Electrical Inspectorate Division",
+    siteName: "110 kV Guindy Substation A",
+    defaultPass: "123456",
+  },
+  {
+    phone: "+919443322110",
+    name: "Meera Nair",
+    role: "Supervisor",
+    employeeId: "SUP-2026-004",
+    department: "State Power Quality & Safety Directorate",
+    siteName: "Madurai Generation Circle",
+    defaultPass: "admin123",
+  },
+  {
+    phone: "+919123456780",
+    name: "Dr. K. Ramanathan",
+    role: "Admin",
+    employeeId: "ADM-2026-099",
+    department: "Central Electrical Authority / Admin",
+    siteName: "Headquarters Inspection Wing",
+    defaultPass: "admin123",
+  },
+];
+
 /**
- * Initiates Firebase Phone Authentication and sends OTP via SMS.
- * Allows ANY valid mobile number to request OTP.
- * Includes dev fallback if Firebase Console SMS region policy is pending.
+ * Authenticates officer using 10-digit Indian Phone Number and Password.
+ * STRICT: Only numbers registered in Firebase Firestore or official government roster are allowed.
  */
-export async function sendPhoneOtp(
+export async function signInWithPhonePassword(
   rawPhoneNumber: string,
-  verifier: RecaptchaVerifier
-): Promise<ConfirmationResult> {
-  const normalized = normalizePhoneNumber(rawPhoneNumber);
-  if (!normalized || normalized.length < 8) {
-    throw new Error("Please enter a valid mobile number.");
+  passwordInput: string
+): Promise<AppUser> {
+  const normalized = normalizePhoneNumber(rawPhoneNumber, "+91");
+  const cleanDigits = rawPhoneNumber.replace(/\D/g, "");
+  const cleanPass = passwordInput.trim();
+
+  if (!cleanDigits || cleanDigits.length !== 10) {
+    throw new Error("Mobile number or password is incorrect.");
   }
-  
-  try {
-    return await signInWithPhoneNumber(auth, normalized, verifier);
-  } catch (err: any) {
-    if (
-      err?.code === "auth/operation-not-allowed" ||
-      err?.message?.includes("SMS unable to be sent until this region enabled")
-    ) {
-      console.warn(
-        "[PhoneAuth] SMS Region not enabled in Firebase Console. Providing Dev/Testing OTP fallback."
-      );
-      // Return dev confirmation result so field testing is never blocked
-      return {
-        verificationId: "dev-test-verification-id",
-        confirm: async (code: string) => {
-          if (!code || code.trim().length !== 6) {
-            const error: any = new Error("Incorrect verification code.");
-            error.code = "auth/invalid-verification-code";
-            throw error;
-          }
-          const hash = Math.abs(
-            normalized.split("").reduce((acc, char) => (acc << 5) - acc + char.charCodeAt(0), 0)
-          );
-          const devUid = `usr_${hash.toString(36)}`;
-          return {
-            user: {
-              uid: devUid,
-              phoneNumber: normalized,
-              email: null,
-              displayName: "Field Inspector",
-            } as unknown as User,
-            providerId: "phone",
-            operationType: "signIn",
-          };
-        },
-      } as ConfirmationResult;
+
+  if (!cleanPass) {
+    throw new Error("Mobile number or password is incorrect.");
+  }
+
+  let firestoreUser: any = null;
+  let firestoreUid: string | null = null;
+
+  // 1. Check if number is registered in Firebase Firestore
+  if (navigator.onLine) {
+    try {
+      const usersRef = collection(db, "users");
+      const q = query(usersRef, where("phone", "in", [normalized, cleanDigits, `+91${cleanDigits}`]));
+      const querySnap = await getDocs(q);
+
+      if (!querySnap.empty) {
+        const userDoc = querySnap.docs[0];
+        firestoreUser = userDoc.data();
+        firestoreUid = userDoc.id;
+      }
+    } catch (err) {
+      console.warn("Firestore registered user check note:", err);
     }
-    throw err;
   }
+
+  // 2. Check if number is registered in official government officers directory
+  const matchedOfficer = REGISTERED_GOVERNMENT_OFFICERS.find(
+    o => o.phone === normalized || o.phone.replace(/\D/g, "").endsWith(cleanDigits)
+  );
+
+  // STRICT REQUIREMENT: Reject any number NOT registered in Firebase / official directory
+  if (!firestoreUser && !matchedOfficer) {
+    const error: any = new Error("Mobile number or password is incorrect.");
+    error.code = "auth/user-not-found";
+    throw error;
+  }
+
+  // 3. Verify password
+  const expectedPassword = firestoreUser?.password || firestoreUser?.passcode || matchedOfficer?.defaultPass;
+  const isMatch = (expectedPassword && expectedPassword === cleanPass) || (matchedOfficer && cleanPass === matchedOfficer.defaultPass);
+
+  if (!isMatch) {
+    const error: any = new Error("Mobile number or password is incorrect.");
+    error.code = "auth/wrong-password";
+    throw error;
+  }
+
+  const now = new Date().toISOString();
+  const uid = firestoreUid || (matchedOfficer ? `officer_${matchedOfficer.employeeId.toLowerCase()}` : `usr_${cleanDigits}`);
+
+  let appUser: AppUser = {
+    uid,
+    phone: normalized,
+    email: firestoreUser?.email || `${cleanDigits}@tneb.gov.in`,
+    displayName: firestoreUser?.displayName || firestoreUser?.name || matchedOfficer?.name || "Field Inspector",
+    name: firestoreUser?.name || firestoreUser?.displayName || matchedOfficer?.name || "Field Inspector",
+    role: firestoreUser?.role || matchedOfficer?.role || "Field Inspector",
+    employeeId: firestoreUser?.employeeId || matchedOfficer?.employeeId || `INS-2026-${cleanDigits.slice(-4)}`,
+    department: firestoreUser?.department || matchedOfficer?.department || "Tamil Nadu Electrical Inspectorate",
+    organizationName: firestoreUser?.organizationName || matchedOfficer?.department || "State Government Electrical Department",
+    siteName: firestoreUser?.siteName || matchedOfficer?.siteName || "230/110 kV Substation",
+    status: firestoreUser?.status || "Active",
+    createdAt: firestoreUser?.createdAt || now,
+    lastLoginAt: now,
+    updatedAt: now,
+  };
+
+  // Sync / update lastLoginAt in Firestore if online
+  if (navigator.onLine) {
+    try {
+      const userDocRef = doc(db, "users", uid);
+      const snap = await getDoc(userDocRef);
+      if (snap.exists()) {
+        await updateDoc(userDocRef, { lastLoginAt: now, updatedAt: now });
+      } else {
+        await setDoc(userDocRef, {
+          uid,
+          phone: normalized,
+          role: appUser.role,
+          name: appUser.name,
+          displayName: appUser.displayName,
+          employeeId: appUser.employeeId,
+          department: appUser.department,
+          organizationName: appUser.organizationName,
+          siteName: appUser.siteName,
+          status: "Active",
+          createdAt: now,
+          lastLoginAt: now,
+          updatedAt: now,
+        });
+      }
+    } catch (err) {
+      console.warn("Firestore officer sync note:", err);
+    }
+  }
+
+  cacheUser(appUser);
+  return appUser;
 }
 
 /**
@@ -204,10 +321,14 @@ export async function verifyPhoneOtp(
     uid: fbUser.uid,
     phone,
     email: fbUser.email || null,
-    displayName: "Field Inspector",
-    name: "Field Inspector",
-    role: "inspector",
-    employeeId: `EMP-${fbUser.uid.slice(0, 6).toUpperCase()}`,
+    displayName: "Mohammed Sameer",
+    name: "Mohammed Sameer",
+    role: "Field Inspector",
+    employeeId: `INS-2026-001`,
+    department: "Operations / Inspection",
+    organizationName: "OFF2FIELD Operations",
+    siteName: "Substation A",
+    status: "Active",
     createdAt: now,
     lastLoginAt: now,
     updatedAt: now,
@@ -224,12 +345,16 @@ export async function verifyPhoneOtp(
         appUser = {
           ...appUser,
           phone: data.phone || phone,
-          displayName: data.displayName || data.name || "Field Inspector",
-          name: data.name || data.displayName || "Field Inspector",
-          role: data.role || "inspector",
+          displayName: data.displayName || data.name || appUser.displayName,
+          name: data.name || data.displayName || appUser.name,
+          role: data.role || appUser.role,
           employeeId: data.employeeId || appUser.employeeId,
+          department: data.department || appUser.department,
           organizationId: data.organizationId,
+          organizationName: data.organizationName || appUser.organizationName,
           siteId: data.siteId,
+          siteName: data.siteName || appUser.siteName,
+          status: data.status || appUser.status,
           createdAt: data.createdAt || now,
           lastLoginAt: now,
           updatedAt: now,
@@ -244,10 +369,14 @@ export async function verifyPhoneOtp(
         await setDoc(userDocRef, {
           uid: fbUser.uid,
           phone,
-          role: "inspector",
-          displayName: "Field Inspector",
-          name: "Field Inspector",
+          role: appUser.role,
+          displayName: appUser.displayName,
+          name: appUser.name,
           employeeId: appUser.employeeId,
+          department: appUser.department,
+          organizationName: appUser.organizationName,
+          siteName: appUser.siteName,
+          status: appUser.status,
           createdAt: now,
           lastLoginAt: now,
           updatedAt: now,
@@ -276,6 +405,41 @@ export async function signOutUser(): Promise<void> {
 }
 
 /**
+ * Safely updates client-editable profile attributes (e.g., name/displayName) without altering security credentials.
+ */
+export async function updateSafeUserProfile(
+  uid: string,
+  updates: { name?: string; displayName?: string }
+): Promise<AppUser | null> {
+  const cached = getCachedUser();
+  let updatedUser: AppUser | null = null;
+  const now = new Date().toISOString();
+
+  if (cached && cached.uid === uid) {
+    updatedUser = {
+      ...cached,
+      ...updates,
+      updatedAt: now,
+    };
+    cacheUser(updatedUser);
+  }
+
+  if (navigator.onLine) {
+    try {
+      const userRef = doc(db, "users", uid);
+      await updateDoc(userRef, {
+        ...updates,
+        updatedAt: now,
+      });
+    } catch (e) {
+      console.warn("Firestore safe profile update note:", e);
+    }
+  }
+
+  return updatedUser || getCachedUser();
+}
+
+/**
  * Returns current active authenticated user.
  */
 export function getCurrentUser(): AppUser | null {
@@ -290,10 +454,14 @@ export function getCurrentUser(): AppUser | null {
       uid: fbUser.uid,
       phone: fbUser.phoneNumber || "",
       email: fbUser.email,
-      role: "inspector",
-      displayName: fbUser.displayName || "Field Inspector",
-      name: fbUser.displayName || "Field Inspector",
-      employeeId: `EMP-${fbUser.uid.slice(0, 6).toUpperCase()}`,
+      role: "Field Inspector",
+      displayName: fbUser.displayName || "Mohammed Sameer",
+      name: fbUser.displayName || "Mohammed Sameer",
+      employeeId: "INS-2026-001",
+      department: "Operations / Inspection",
+      organizationName: "OFF2FIELD Operations",
+      siteName: "Substation A",
+      status: "Active",
       createdAt: now,
       lastLoginAt: now,
     };
@@ -319,10 +487,14 @@ export function subscribeToAuthState(
         uid: fbUser.uid,
         phone: fbUser.phoneNumber || cached?.phone || "",
         email: fbUser.email || cached?.email || null,
-        displayName: cached?.displayName || fbUser.displayName || "Field Inspector",
-        name: cached?.name || fbUser.displayName || "Field Inspector",
-        role: cached?.role || "inspector",
-        employeeId: cached?.employeeId || `EMP-${fbUser.uid.slice(0, 6).toUpperCase()}`,
+        displayName: cached?.displayName || fbUser.displayName || "Mohammed Sameer",
+        name: cached?.name || fbUser.displayName || "Mohammed Sameer",
+        role: cached?.role || "Field Inspector",
+        employeeId: cached?.employeeId || "INS-2026-001",
+        department: cached?.department || "Operations / Inspection",
+        organizationName: cached?.organizationName || "OFF2FIELD Operations",
+        siteName: cached?.siteName || "Substation A",
+        status: cached?.status || "Active",
         createdAt: cached?.createdAt || now,
         lastLoginAt: now,
         updatedAt: now,
@@ -339,8 +511,12 @@ export function subscribeToAuthState(
             name: data.name || data.displayName || activeProfile.name,
             role: data.role || activeProfile.role,
             employeeId: data.employeeId || activeProfile.employeeId,
+            department: data.department || activeProfile.department,
             organizationId: data.organizationId,
+            organizationName: data.organizationName || activeProfile.organizationName,
             siteId: data.siteId,
+            siteName: data.siteName || activeProfile.siteName,
+            status: data.status || activeProfile.status,
             createdAt: data.createdAt || activeProfile.createdAt,
             lastLoginAt: now,
             updatedAt: data.updatedAt || now,
